@@ -51,12 +51,13 @@ and returns this envelope:
 
 | Enum | Values |
 | --- | --- |
-| `role` | `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`, `WORKER` |
+| `role` | `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`, `PROJECT_MANAGER`, `WORKER` |
 | `workerType` | `EMPLOYEE`, `CONTRACTOR`, `TEMPORARY_WORKER` |
 | Worker `status` | `ACTIVE`, `INACTIVE`, `OFFBOARDED` |
 | Team `status` | `ACTIVE`, `INACTIVE` |
 | Assignment `status` | `ACTIVE`, `COMPLETED`, `CANCELLED` |
 | Timesheet `status` | `DRAFT`, `SUBMITTED` |
+| Invoice `status` | `DRAFT`, `PENDING_APPROVAL`, `APPROVED`, `REJECTED` |
 
 > There is **no** `APPROVED` or `REJECTED` timesheet status in MVP 1.
 > `SUBMITTED` means "the worker finished entering this week", not "a manager
@@ -188,10 +189,12 @@ Branch on `code`, not on `message` — messages may be reworded.
 | `409` | `DUPLICATE_TIMESHEET` | that assignment already has that week |
 | `409` | `INVALID_WORKER_STATE` | illegal worker lifecycle transition |
 | `409` | `INVALID_TIMESHEET_STATE` | e.g. editing a `SUBMITTED` timesheet |
+| `409` | `INVALID_INVOICE_STATE` | e.g. approving/rejecting/resubmitting an invoice not `PENDING_APPROVAL` |
 | `409` | `CONSTRAINT_VIOLATION` | database constraint hit (rare; a race) |
 | `409` | `CONCURRENT_MODIFICATION` | someone else changed it; reload and retry |
 | `422` | `INVALID_ASSIGNMENT` | assignment business rule broken |
 | `422` | `INVALID_TIMESHEET_ENTRY` | hours or work date rejected |
+| `422` | `INVALID_CONTRACT` | contract business rule broken (e.g. non-positive duration) |
 | `500` | `INTERNAL_ERROR` | unexpected; nothing internal is exposed |
 
 `fieldErrors` is populated only for `VALIDATION_FAILED`:
@@ -216,38 +219,48 @@ This distinction matters for your UI:
 
 ## 4. Who can call what
 
-| Endpoint | `SYSTEM_ADMIN` | `HR_MANAGER` | `MANAGER` | `WORKER` |
-| --- | :-: | :-: | :-: | :-: |
-| `POST /api/auth/login` | ✅ | ✅ | ✅ | ✅ |
-| `GET /api/auth/me` | ✅ | ✅ | ✅ | ✅ |
-| `GET /api/users` | ✅ org | ✅ org | — | — |
-| `GET /api/dashboard/summary` | ✅ org | ✅ org | ✅ own teams | ✅ self |
-| `POST /api/workers` | ✅ | ✅ | — | — |
-| `GET /api/workers` | ✅ org | ✅ org | ✅ own teams | — |
-| `GET /api/workers/me` | — | — | — | ✅ self |
-| `GET /api/workers/{id}` | ✅ org | ✅ org | ✅ own teams | ✅ self only |
-| `PATCH /api/workers/{id}` | ✅ | ✅ | — | — |
-| `POST /api/workers/{id}/offboard` | ✅ | ✅ | — | — |
-| `POST /api/teams` | ✅ | — | — | — |
-| `GET /api/teams` | ✅ org | ✅ org | ✅ own only | — |
-| `GET /api/teams/{id}` | ✅ org | ✅ org | ✅ own only | ✅ own team |
-| `GET /api/teams/{id}/workers` | ✅ org | ✅ org | ✅ own only | ✅ own team |
-| `POST /api/assignments` | ✅ | — | ✅ own teams | — |
-| `GET /api/assignments` | ✅ org | ✅ org | ✅ own teams | — |
-| `GET /api/assignments/my` | — | — | — | ✅ self |
-| `GET /api/assignments/{id}` | ✅ org | ✅ org | ✅ own teams | ✅ self only |
-| `PATCH /api/assignments/{id}/status` | ✅ | — | ✅ own teams | — |
-| `POST /api/timesheets` | — | — | — | ✅ self |
-| `GET /api/timesheets/my` | — | — | — | ✅ self |
-| `GET /api/timesheets` | ✅ org | ✅ org | ✅ own teams | — |
-| `GET /api/timesheets/{id}` | ✅ org | ✅ org | ✅ own teams | ✅ self only |
-| `PUT /api/timesheets/{id}/entries` | — | — | — | ✅ own draft |
-| `POST /api/timesheets/{id}/submit` | — | — | — | ✅ own draft |
-| `GET /api/manager/*` | ✅ org | — | ✅ own teams | — |
-| `GET /api/hr/workers*` | ✅ | ✅ | — | — |
+| Endpoint | `SYSTEM_ADMIN` | `HR_MANAGER` | `MANAGER` | `PROJECT_MANAGER` | `WORKER` |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| `POST /api/auth/login` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/auth/me` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/users` | ✅ org | ✅ org | — | — | — |
+| `GET /api/dashboard/summary` | ✅ org | ✅ org | ✅ own teams | ✅ own queue | ✅ self |
+| `POST /api/workers` | ✅ | ✅ | — | — | — |
+| `GET /api/workers` | ✅ org | ✅ org | ✅ own teams | — | — |
+| `GET /api/workers/me` | — | — | — | — | ✅ self |
+| `GET /api/workers/{id}` | ✅ org | ✅ org | ✅ own teams | — | ✅ self only |
+| `PATCH /api/workers/{id}` | ✅ | ✅ | — | — | — |
+| `POST /api/workers/{id}/offboard` | ✅ | ✅ | — | — | — |
+| `POST /api/teams` | ✅ | — | — | — | — |
+| `GET /api/teams` | ✅ org | ✅ org | ✅ own only | — | — |
+| `GET /api/teams/{id}` | ✅ org | ✅ org | ✅ own only | — | ✅ own team |
+| `GET /api/teams/{id}/workers` | ✅ org | ✅ org | ✅ own only | — | ✅ own team |
+| `POST /api/assignments` | ✅ | — | ✅ own teams | — | — |
+| `GET /api/assignments` | ✅ org | ✅ org | ✅ own teams | — | — |
+| `GET /api/assignments/my` | — | — | — | — | ✅ self |
+| `GET /api/assignments/{id}` | ✅ org | ✅ org | ✅ own teams | — | ✅ self only |
+| `PATCH /api/assignments/{id}/status` | ✅ | — | ✅ own teams | — | — |
+| `POST /api/timesheets` | — | — | — | — | ✅ self |
+| `GET /api/timesheets/my` | — | — | — | — | ✅ self |
+| `GET /api/timesheets` | ✅ org | ✅ org | ✅ own teams | — | — |
+| `GET /api/timesheets/{id}` | ✅ org | ✅ org | ✅ own teams | — | ✅ self only |
+| `PUT /api/timesheets/{id}/entries` | — | — | — | — | ✅ own draft |
+| `POST /api/timesheets/{id}/submit` | — | — | — | — | ✅ own draft |
+| `POST /api/contracts` | ✅ | — | — | — | — |
+| `GET /api/contracts` | ✅ org | ✅ org | ✅ own only | — | — |
+| `GET /api/contracts/{id}` | ✅ org | ✅ org | ✅ own only | — | — |
+| `POST /api/invoices` | — | — | ✅ own contracts | — | — |
+| `GET /api/invoices` | ✅ org | ✅ org | ✅ raised by them | ✅ assigned to them | — |
+| `GET /api/invoices/{id}` | ✅ org | ✅ org | ✅ raised by them | ✅ assigned to them | — |
+| `POST /api/invoices/{id}/submit` | — | — | ✅ own draft | — | — |
+| `POST /api/invoices/{id}/approve` | — | — | — | ✅ assigned to them | — |
+| `POST /api/invoices/{id}/reject` | — | — | — | ✅ assigned to them | — |
+| `GET /api/manager/*` | ✅ org | — | ✅ own teams | — | — |
+| `GET /api/hr/workers*` | ✅ | ✅ | — | — | — |
 
 "org" = everything in the caller's organization. "own teams" = only teams where
-the caller is the manager. "self" = derived from the JWT.
+the caller is the manager. "self" = derived from the JWT. "own queue" /
+"assigned to them" = invoices routed to that project manager.
 
 ---
 
@@ -685,8 +698,9 @@ than hard-coding field names:
 
 | Role | Keys returned |
 | --- | --- |
-| `SYSTEM_ADMIN`, `HR_MANAGER` | `total_workers`, `active_workers`, `offboarded_workers`, `teams`, `active_assignments`, `submitted_timesheets` |
-| `MANAGER` | `my_teams`, `my_workers`, `active_assignments`, `submitted_timesheets`, `draft_timesheets` |
+| `SYSTEM_ADMIN`, `HR_MANAGER` | `total_workers`, `active_workers`, `offboarded_workers`, `teams`, `active_assignments`, `submitted_timesheets`, `contracts` |
+| `MANAGER` | `my_teams`, `my_workers`, `active_assignments`, `submitted_timesheets`, `draft_timesheets`, `invoices_pending_approval` |
+| `PROJECT_MANAGER` | `invoices_pending_approval` |
 | `WORKER` | `active_assignments`, `draft_timesheets`, `submitted_timesheets`, `hours_submitted` |
 
 ```json
@@ -717,7 +731,172 @@ to widen the scope with a query parameter.
 
 ---
 
-## 10. CORS
+## 10. Contracts
+
+A contract is the project a set of workers is engaged to deliver. An admin
+creates it and assigns the manager who owns delivery; invoices are then raised
+against it.
+
+### `POST /api/contracts`
+
+Role: `SYSTEM_ADMIN` only.
+
+```json
+{
+  "projectName": "Website Migration",
+  "startDate": "2026-06-01",
+  "durationInMonths": 6,
+  "managerId": 3
+}
+```
+
+| Field | Required | Rules |
+| --- | --- | --- |
+| `projectName` | yes | ≤ 200 chars |
+| `startDate` | yes | date |
+| `durationInMonths` | yes | 1–120 |
+| `managerId` | yes | a `MANAGER`-role user in your organization |
+
+There is no `createdByAdminId` field — it is taken from your token.
+
+**Response `201`** — a `ContractResponse`. `endDate` is derived
+(`startDate` + `durationInMonths`), never stored or accepted as input:
+
+```json
+{
+  "id": 1,
+  "projectName": "Website Migration",
+  "startDate": "2026-06-01",
+  "endDate": "2026-12-01",
+  "durationInMonths": 6,
+  "managerId": 3,
+  "managerName": "David Miller",
+  "createdByAdminId": 1,
+  "createdByAdminName": "System Admin",
+  "createdAt": "2026-08-18T09:10:00.000Z",
+  "updatedAt": "2026-08-18T09:10:00.000Z"
+}
+```
+
+Errors: `400 VALIDATION_FAILED`, `403 ACCESS_DENIED`,
+`404 RESOURCE_NOT_FOUND` (`managerId`), `422 INVALID_CONTRACT` (not a manager,
+or a non-positive duration).
+
+### `GET /api/contracts`, `GET /api/contracts/{id}`
+
+Roles: `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`. Paginated `ContractResponse`
+for the list. Admin/HR see the organization; a manager sees only contracts
+assigned to them. `PROJECT_MANAGER` and `WORKER` cannot browse contracts
+directly — a project manager reaches one through the invoice they are
+approving, which carries `contractId` and `contractProjectName`.
+
+---
+
+## 11. Invoices
+
+The approval workflow: a manager verifies timesheets against a contract and
+raises an invoice, submits it, and the project manager it is routed to makes
+one approve-or-reject decision.
+
+```
+DRAFT --(submit)--> PENDING_APPROVAL --(approve)--> APPROVED
+                                      \-(reject)---> REJECTED
+```
+
+Every transition is a single forward step — there is no un-approving,
+un-rejecting or resubmitting a decided invoice.
+
+### `POST /api/invoices` — generate
+
+Role: `MANAGER`. Starts as `DRAFT`, not yet visible to the project manager.
+
+```json
+{
+  "contractId": 1,
+  "projectManagerId": 6,
+  "periodStart": "2026-08-03",
+  "periodEnd": "2026-08-09",
+  "amount": 6400.00,
+  "notes": "August week 1 hours, verified against timesheets"
+}
+```
+
+| Field | Required | Rules |
+| --- | --- | --- |
+| `contractId` | yes | must be a contract **you** own |
+| `projectManagerId` | yes | a `PROJECT_MANAGER`-role user in your organization |
+| `periodStart` / `periodEnd` | yes | dates; `periodEnd` ≥ `periodStart` |
+| `amount` | yes | ≥ 0, 2 decimals |
+| `notes` | no | ≤ 1000 chars |
+
+**Response `201`** — an `InvoiceResponse`:
+
+```json
+{
+  "id": 4,
+  "contractId": 1,
+  "contractProjectName": "Website Migration",
+  "managerId": 3,
+  "managerName": "David Miller",
+  "projectManagerId": 6,
+  "projectManagerName": "Priya Menon",
+  "periodStart": "2026-08-03",
+  "periodEnd": "2026-08-09",
+  "amount": 6400.00,
+  "notes": "August week 1 hours, verified against timesheets",
+  "decisionNotes": null,
+  "status": "DRAFT",
+  "createdAt": "2026-08-18T09:40:00.000Z",
+  "updatedAt": "2026-08-18T09:40:00.000Z"
+}
+```
+
+Errors: `400 VALIDATION_FAILED`, `403 UNAUTHORIZED_RESOURCE_ACCESS` (not your
+contract, or the project manager is in another organization),
+`404 RESOURCE_NOT_FOUND` (`contractId` or `projectManagerId`).
+
+### `POST /api/invoices/{id}/submit`
+
+Role: `MANAGER`, own invoice only. No request body. `DRAFT` → `PENDING_APPROVAL`.
+
+Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS`, `409 INVALID_INVOICE_STATE` (not
+`DRAFT`).
+
+### `POST /api/invoices/{id}/approve`
+
+Role: `PROJECT_MANAGER`, only when the invoice is assigned to you.
+`PENDING_APPROVAL` → `APPROVED`. Body is optional:
+
+```json
+{ "notes": "Looks good, approved for payment" }
+```
+
+Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS`, `409 INVALID_INVOICE_STATE` (not
+`PENDING_APPROVAL`).
+
+### `POST /api/invoices/{id}/reject`
+
+Role: `PROJECT_MANAGER`, only when the invoice is assigned to you.
+`PENDING_APPROVAL` → `REJECTED`. `notes` is **required** — it is the reason the
+manager sees:
+
+```json
+{ "notes": "Hours do not match the submitted timesheets for Aug 5" }
+```
+
+Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS`,
+`409 INVALID_INVOICE_STATE` (not `PENDING_APPROVAL`, or `notes` blank/missing).
+
+### `GET /api/invoices`, `GET /api/invoices/{id}`
+
+Roles: `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`, `PROJECT_MANAGER`. Paginated
+`InvoiceResponse` for the list, with an optional `status` filter. Admin/HR see
+the organization; a manager sees invoices they raised; a project manager sees
+only invoices routed to them.
+
+---
+
+## 12. CORS
 
 Configured for `http://localhost:3000` and `http://localhost:5173` by default,
 with credentials allowed. Wildcards are deliberately not used. If your dev
@@ -732,7 +911,7 @@ the console before assuming the API is down.
 
 ---
 
-## 11. Local test accounts
+## 13. Local test accounts
 
 Available when the backend runs with the `dev` profile. **Every account uses
 the password `Password123!`.**
@@ -743,6 +922,7 @@ the password `Password123!`.**
 | `hr@example.com` | Anita Sharma | `HR_MANAGER` | onboards/offboards |
 | `manager@example.com` | David Miller | `MANAGER` | manages Backend Engineering |
 | `manager2@example.com` | Sarah Chen | `MANAGER` | manages Frontend Engineering |
+| `pm@example.com` | Priya Menon | `PROJECT_MANAGER` | approves invoices on Website Migration |
 | `john@example.com` | John Carter | `WORKER` | `CONTRACTOR`, Backend, `EMP-1001` |
 | `david@example.com` | David Kumar | `WORKER` | `EMPLOYEE`, Backend, `EMP-1002` |
 | `rahul@example.com` | Rahul Nair | `WORKER` | `EMPLOYEE`, Frontend, `EMP-1003` |
@@ -752,11 +932,13 @@ the password `Password123!`.**
 
 Seeded data: two teams, three active assignments, and one **submitted** week for
 John (week of `2026-08-10`, 40 hours). The week of `2026-08-17` is left free so
-you can create it from the UI.
+you can create it from the UI. Also one contract (Website Migration, owned by
+David Miller) with two invoices against it: one `PENDING_APPROVAL` in Priya's
+queue and one already `APPROVED`.
 
 ---
 
-## 12. Suggested screen → endpoint map
+## 14. Suggested screen → endpoint map
 
 **Worker**
 1. `POST /api/auth/login` → store `accessToken`, branch on `role`
@@ -773,6 +955,15 @@ you can create it from the UI.
 3. `POST /api/assignments` → assign work
 4. `GET /api/manager/timesheets?status=SUBMITTED` → weekly review
 5. `PATCH /api/assignments/{id}/status` → close finished work
+6. `GET /api/contracts` → contracts you own
+7. `POST /api/invoices` → generate an invoice once timesheets are verified
+8. `POST /api/invoices/{id}/submit` → route it to the project manager
+9. `GET /api/invoices?status=REJECTED` → see what came back and why
+
+**Project Manager**
+1. `GET /api/invoices?status=PENDING_APPROVAL` → approval queue
+2. `GET /api/invoices/{id}` → review the contract, period and amount
+3. `POST /api/invoices/{id}/approve` or `POST /api/invoices/{id}/reject` → decide
 
 **HR**
 1. `GET /api/hr/workers?status=ACTIVE` → roster
@@ -784,16 +975,21 @@ you can create it from the UI.
 1. `GET /api/teams` → org structure
 2. `POST /api/teams` → new team
 3. `GET /api/workers` → org-wide roster
+4. `POST /api/contracts` → new contract, assign the owning manager
 
 ---
 
-## 13. Not in MVP 1
+## 15. Not in this release
 
 Do not build UI for these; the endpoints do not exist:
 
-- timesheet approval / rejection (there is no approver in MVP 1)
+- timesheet approval / rejection (timesheets are worker-submitted only; invoice
+  approval is a separate, contract-level workflow — see §11)
 - leave management, task management, work reassignment
-- billing, milestones, invoices, invoice approval
+- milestone-based billing (an invoice here is a simple period + amount claim
+  against a contract, not tied to milestones)
+- re-submitting a `REJECTED` invoice as a new draft (the manager must raise a
+  new invoice)
 - user self-registration, password reset, refresh tokens, logout
-- deleting workers, teams, assignments or timesheets (nothing is ever
-  hard-deleted; lifecycle is status-based)
+- deleting workers, teams, assignments, timesheets, contracts or invoices
+  (nothing is ever hard-deleted; lifecycle is status-based)

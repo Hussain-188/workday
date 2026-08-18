@@ -3,6 +3,9 @@ package com.hackathon.workday.dashboard;
 import com.hackathon.workday.assignment.AssignmentRepository;
 import com.hackathon.workday.assignment.AssignmentStatus;
 import com.hackathon.workday.common.exception.ResourceNotFoundException;
+import com.hackathon.workday.contract.ContractRepository;
+import com.hackathon.workday.invoice.InvoiceRepository;
+import com.hackathon.workday.invoice.InvoiceStatus;
 import com.hackathon.workday.security.AuthPrincipal;
 import com.hackathon.workday.team.TeamRepository;
 import com.hackathon.workday.timesheet.TimesheetRepository;
@@ -34,13 +37,18 @@ public class DashboardController {
 	private final TeamRepository teamRepository;
 	private final AssignmentRepository assignmentRepository;
 	private final TimesheetRepository timesheetRepository;
+	private final ContractRepository contractRepository;
+	private final InvoiceRepository invoiceRepository;
 
 	public DashboardController(WorkerRepository workerRepository, TeamRepository teamRepository,
-			AssignmentRepository assignmentRepository, TimesheetRepository timesheetRepository) {
+			AssignmentRepository assignmentRepository, TimesheetRepository timesheetRepository,
+			ContractRepository contractRepository, InvoiceRepository invoiceRepository) {
 		this.workerRepository = workerRepository;
 		this.teamRepository = teamRepository;
 		this.assignmentRepository = assignmentRepository;
 		this.timesheetRepository = timesheetRepository;
+		this.contractRepository = contractRepository;
+		this.invoiceRepository = invoiceRepository;
 	}
 
 	@GetMapping("/summary")
@@ -62,6 +70,7 @@ public class DashboardController {
 						.countByOrganizationIdAndStatus(organizationId, AssignmentStatus.ACTIVE));
 				tiles.put("submitted_timesheets", timesheetRepository
 						.countByOrganizationIdAndStatus(organizationId, TimesheetStatus.SUBMITTED));
+				tiles.put("contracts", contractRepository.countByOrganizationId(organizationId));
 			}
 			case MANAGER -> {
 				tiles.put("my_teams", teamRepository.countByOrganizationIdAndManagerId(organizationId, userId));
@@ -72,7 +81,11 @@ public class DashboardController {
 						.countByTeamManagerIdAndStatus(userId, TimesheetStatus.SUBMITTED));
 				tiles.put("draft_timesheets", timesheetRepository
 						.countByTeamManagerIdAndStatus(userId, TimesheetStatus.DRAFT));
+				tiles.put("invoices_pending_approval", invoiceRepository
+						.countByManagerIdAndStatus(userId, InvoiceStatus.PENDING_APPROVAL));
 			}
+			case PROJECT_MANAGER -> tiles.put("invoices_pending_approval", invoiceRepository
+					.countByProjectManagerIdAndStatus(userId, InvoiceStatus.PENDING_APPROVAL));
 			case WORKER -> {
 				Worker self = workerRepository.findByUserId(userId)
 						.orElseThrow(() -> new ResourceNotFoundException(

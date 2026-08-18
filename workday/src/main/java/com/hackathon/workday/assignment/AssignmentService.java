@@ -120,6 +120,8 @@ public class AssignmentService {
 			case MANAGER -> status == null
 					? assignmentRepository.findByTeamManagerId(actor.getUserId(), pageable)
 					: assignmentRepository.findByTeamManagerIdAndStatus(actor.getUserId(), status, pageable);
+			case PROJECT_MANAGER -> throw new ForbiddenOperationException(
+					"Project managers cannot list assignments");
 			case WORKER -> throw new ForbiddenOperationException(
 					"Workers cannot list all assignments; use GET /api/assignments/my");
 		};
@@ -218,6 +220,8 @@ public class AssignmentService {
 					throw new UnauthorizedAccessException("This assignment is not on a team you manage");
 				}
 			}
+			case PROJECT_MANAGER -> throw new UnauthorizedAccessException(
+					"Project managers cannot view assignments");
 			case WORKER -> {
 				Worker self = requireSelfWorker(actor);
 				if (!assignment.getWorker().getId().equals(self.getId())) {

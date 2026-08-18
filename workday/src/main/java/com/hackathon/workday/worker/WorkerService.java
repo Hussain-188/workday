@@ -113,6 +113,8 @@ public class WorkerService {
 					? workerRepository.findByManagerId(actor.getUserId(), actor.getOrganizationId(), pageable)
 					: workerRepository.findByManagerIdAndStatus(
 							actor.getUserId(), actor.getOrganizationId(), status, pageable);
+			case PROJECT_MANAGER -> throw new ForbiddenOperationException(
+					"Project managers cannot list workers");
 			case WORKER -> throw new ForbiddenOperationException(
 					"Workers cannot list other workers; use /api/workers/me");
 		};
@@ -257,6 +259,8 @@ public class WorkerService {
 					throw new UnauthorizedAccessException("This worker is not on a team you manage");
 				}
 			}
+			case PROJECT_MANAGER -> throw new UnauthorizedAccessException(
+					"Project managers cannot view worker records");
 			case WORKER -> {
 				if (!worker.getUser().getId().equals(actor.getUserId())) {
 					throw new UnauthorizedAccessException("You may only view your own worker record");
@@ -275,6 +279,7 @@ public class WorkerService {
 					throw new UnauthorizedAccessException("You do not manage this team");
 				}
 			}
+			case PROJECT_MANAGER -> throw new UnauthorizedAccessException("Project managers cannot view teams");
 			case WORKER -> {
 				Worker self = workerRepository.findByUserId(actor.getUserId())
 						.orElseThrow(() -> new ResourceNotFoundException(

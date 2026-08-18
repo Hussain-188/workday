@@ -109,6 +109,8 @@ public class TeamService {
 					teamRepository.findByOrganizationId(actor.getOrganizationId(), pageable);
 			case MANAGER -> teamRepository.findByOrganizationIdAndManagerId(
 					actor.getOrganizationId(), actor.getUserId(), pageable);
+			case PROJECT_MANAGER -> throw new ForbiddenOperationException(
+					"Project managers cannot list teams");
 			case WORKER -> throw new ForbiddenOperationException(
 					"Workers cannot list teams; use GET /api/teams/{id} for your own team");
 		};
@@ -150,6 +152,7 @@ public class TeamService {
 					throw new UnauthorizedAccessException("You do not manage this team");
 				}
 			}
+			case PROJECT_MANAGER -> throw new UnauthorizedAccessException("Project managers cannot view teams");
 			case WORKER -> {
 				Worker self = workerRepository.findByUserId(actor.getUserId())
 						.orElseThrow(() -> new ResourceNotFoundException(

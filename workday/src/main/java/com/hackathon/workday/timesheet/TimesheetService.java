@@ -139,6 +139,8 @@ public class TimesheetService {
 			case MANAGER -> status == null
 					? timesheetRepository.findByTeamManagerId(actor.getUserId(), pageable)
 					: timesheetRepository.findByTeamManagerIdAndStatus(actor.getUserId(), status, pageable);
+			case PROJECT_MANAGER -> throw new ForbiddenOperationException(
+					"Project managers cannot list timesheets");
 			case WORKER -> throw new ForbiddenOperationException(
 					"Workers cannot list team timesheets; use GET /api/timesheets/my");
 		};
@@ -195,6 +197,8 @@ public class TimesheetService {
 							"This timesheet belongs to a team you do not manage");
 				}
 			}
+			case PROJECT_MANAGER -> throw new UnauthorizedAccessException(
+					"Project managers cannot view timesheets");
 			case WORKER -> {
 				Worker self = requireSelfWorker(actor);
 				if (!assignment.getWorker().getId().equals(self.getId())) {

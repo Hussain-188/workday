@@ -15,6 +15,12 @@ public enum Role {
 	/** Owns the teams they manage, and work assigned within them. */
 	MANAGER,
 
+	/**
+	 * Owns contract-level approval: reviews the invoices managers submit against
+	 * a contract and approves or rejects them. Does not manage teams or workers.
+	 */
+	PROJECT_MANAGER,
+
 	/** An employee, contractor or temporary worker recording their own hours. */
 	WORKER;
 

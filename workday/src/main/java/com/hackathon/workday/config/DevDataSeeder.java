@@ -2,6 +2,10 @@ package com.hackathon.workday.config;
 
 import com.hackathon.workday.assignment.Assignment;
 import com.hackathon.workday.assignment.AssignmentRepository;
+import com.hackathon.workday.contract.Contract;
+import com.hackathon.workday.contract.ContractRepository;
+import com.hackathon.workday.invoice.Invoice;
+import com.hackathon.workday.invoice.InvoiceRepository;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.organization.OrganizationRepository;
 import com.hackathon.workday.team.Team;
@@ -49,11 +53,14 @@ public class DevDataSeeder implements ApplicationRunner {
 	private final TeamRepository teamRepository;
 	private final AssignmentRepository assignmentRepository;
 	private final TimesheetRepository timesheetRepository;
+	private final ContractRepository contractRepository;
+	private final InvoiceRepository invoiceRepository;
 	private final PasswordEncoder passwordEncoder;
 
 	public DevDataSeeder(OrganizationRepository organizationRepository, UserRepository userRepository,
 			WorkerRepository workerRepository, TeamRepository teamRepository,
 			AssignmentRepository assignmentRepository, TimesheetRepository timesheetRepository,
+			ContractRepository contractRepository, InvoiceRepository invoiceRepository,
 			PasswordEncoder passwordEncoder) {
 		this.organizationRepository = organizationRepository;
 		this.userRepository = userRepository;
@@ -61,6 +68,8 @@ public class DevDataSeeder implements ApplicationRunner {
 		this.teamRepository = teamRepository;
 		this.assignmentRepository = assignmentRepository;
 		this.timesheetRepository = timesheetRepository;
+		this.contractRepository = contractRepository;
+		this.invoiceRepository = invoiceRepository;
 		this.passwordEncoder = passwordEncoder;
 	}
 
@@ -74,12 +83,13 @@ public class DevDataSeeder implements ApplicationRunner {
 
 		Organization acme = organizationRepository.save(new Organization("Acme Corporation", ORGANIZATION_CODE));
 
-		createUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
+		User systemAdmin = createUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
 		createUser(acme, "Anita Sharma", "hr@example.com", Role.HR_MANAGER);
 		// Named David so the acceptance walkthrough reads as written; distinct
 		// from the worker David Kumar below, who is a different person.
 		User davidMiller = createUser(acme, "David Miller", "manager@example.com", Role.MANAGER);
 		User sarahChen = createUser(acme, "Sarah Chen", "manager2@example.com", Role.MANAGER);
+		User priyaMenon = createUser(acme, "Priya Menon", "pm@example.com", Role.PROJECT_MANAGER);
 
 		Team backend = teamRepository.save(new Team(
 				acme, "Backend Engineering", "BACKEND", "Server-side platform team", davidMiller));
@@ -109,6 +119,26 @@ public class DevDataSeeder implements ApplicationRunner {
 		// One completed historical week for John. The week of 2026-08-17 is left
 		// free on purpose so the acceptance walkthrough can create it.
 		seedSubmittedWeek(migration, LocalDate.of(2026, 8, 10));
+
+		Contract websiteMigrationContract = contractRepository.save(new Contract(
+				"Website Migration", LocalDate.of(2026, 6, 1), 6, davidMiller, systemAdmin));
+
+		// A submitted invoice sitting in Priya's approval queue, plus a second one
+		// already decided, so the walkthrough can exercise both list filters.
+		Invoice pendingInvoice = new Invoice(
+				websiteMigrationContract, davidMiller, priyaMenon,
+				LocalDate.of(2026, 8, 3), LocalDate.of(2026, 8, 9),
+				new BigDecimal("6400.00"), "August week 1 hours, verified against timesheets");
+		pendingInvoice.submit();
+		invoiceRepository.save(pendingInvoice);
+
+		Invoice approvedInvoice = new Invoice(
+				websiteMigrationContract, davidMiller, priyaMenon,
+				LocalDate.of(2026, 7, 27), LocalDate.of(2026, 8, 2),
+				new BigDecimal("6400.00"), "July week 5 hours, verified against timesheets");
+		approvedInvoice.submit();
+		approvedInvoice.approve("Looks good, approved for payment");
+		invoiceRepository.save(approvedInvoice);
 
 		log.info("Seeded development data for {} (all accounts use password {})",
 				acme.getName(), DEFAULT_PASSWORD);
