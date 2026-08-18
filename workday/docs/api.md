@@ -227,7 +227,7 @@ This distinction matters for your UI:
 | --- | :-: | :-: | :-: | :-: | :-: |
 | `POST /api/auth/login` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/auth/me` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `GET /api/users` | ✅ org | ✅ org | — | — | — |
+| `GET /api/users` | ✅ org | ✅ org | ✅ `role=PROJECT_MANAGER` only | — | — |
 | `GET /api/dashboard/summary` | ✅ org | ✅ org | ✅ own teams | ✅ own queue | ✅ self |
 | `POST /api/workers` | ✅ | ✅ | — | — | — |
 | `GET /api/workers` | ✅ org | ✅ org | ✅ own teams | — | — |
@@ -744,10 +744,17 @@ an admin/HR user in the organization.
 
 ### `GET /api/users?role=MANAGER`
 
-Roles: `SYSTEM_ADMIN`, `HR_MANAGER`. A read-only directory of login identities
-in your organization, filtered by `role` when supplied. It exists so an admin
-can pick a manager when creating a team; it is not a user-management surface
-and never returns a password hash. Returns a plain array, not a page.
+Roles: `SYSTEM_ADMIN`, `HR_MANAGER` — unfiltered or filtered by any `role`.
+`MANAGER` may also call this, but **only** with `role=PROJECT_MANAGER`
+(`403 FORBIDDEN_OPERATION` otherwise, including an unfiltered call) — MVP 3
+needs it for the project-manager picker on Milestone Billing and the
+Automated Handoff, but a manager still can't browse the org.
+
+A read-only directory of login identities in your organization, filtered by
+`role` when supplied. It exists so an admin can pick a manager when creating a
+team or contract, and so a manager can pick a project manager to route an
+invoice to; it is not a general user-management surface and never returns a
+password hash. Returns a plain array, not a page.
 
 ```json
 [

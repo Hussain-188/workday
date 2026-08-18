@@ -1,5 +1,6 @@
 package com.hackathon.workday.user;
 
+import com.hackathon.workday.common.exception.ForbiddenOperationException;
 import com.hackathon.workday.security.AuthPrincipal;
 import com.hackathon.workday.user.dto.UserSummaryResponse;
 import java.util.List;
@@ -12,12 +13,17 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Read-only directory of login identities, scoped to the caller's organization.
- * Exists so an admin can pick a manager when creating a team; it is not a
- * general user-management surface, and it never exposes a password hash.
+ * Exists so an admin can pick a manager when creating a team or contract, and
+ * so a manager can pick a project manager to route an invoice to — it is not
+ * a general user-management surface, and it never exposes a password hash.
+ *
+ * <p>A manager's access is deliberately narrower than admin/HR's: they may only
+ * ask for {@code role=PROJECT_MANAGER}, never browse the org unfiltered or
+ * look up any other role.
  */
 @RestController
 @RequestMapping("/api/users")
-@PreAuthorize("hasAnyRole('SYSTEM_ADMIN', 'HR_MANAGER')")
+@PreAuthorize("hasAnyRole('SYSTEM_ADMIN', 'HR_MANAGER', 'MANAGER')")
 public class UserController {
 
 	private final UserRepository userRepository;
@@ -30,6 +36,11 @@ public class UserController {
 	public List<UserSummaryResponse> listUsers(
 			@RequestParam(required = false) Role role,
 			@AuthenticationPrincipal AuthPrincipal actor) {
+		if (actor.hasRole(Role.MANAGER) && role != Role.PROJECT_MANAGER) {
+			throw new ForbiddenOperationException(
+					"Managers may only look up project managers (role=PROJECT_MANAGER)");
+		}
+
 		List<User> users = role == null
 				? userRepository.findByOrganizationIdOrderByNameAsc(actor.getOrganizationId())
 				: userRepository.findByOrganizationIdAndRoleOrderByNameAsc(actor.getOrganizationId(), role);
