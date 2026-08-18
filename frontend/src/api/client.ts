@@ -29,15 +29,16 @@ api.interceptors.response.use(
 export default api;
 
 // ── Roles ────────────────────────────────────────────────────────────────────
-// The API speaks SYSTEM_ADMIN/HR_MANAGER/MANAGER/WORKER; the UI is written
-// against admin/hr/manager/worker. Translate once, here, so no component has
-// to care which vocabulary it is holding.
-export type UiRole = 'admin' | 'hr' | 'manager' | 'worker';
+// The API speaks SYSTEM_ADMIN/HR_MANAGER/MANAGER/PROJECT_MANAGER/WORKER; the UI
+// is written against admin/hr/manager/project_manager/worker. Translate once,
+// here, so no component has to care which vocabulary it is holding.
+export type UiRole = 'admin' | 'hr' | 'manager' | 'project_manager' | 'worker';
 
 const ROLE_FROM_API: Record<string, UiRole> = {
   SYSTEM_ADMIN: 'admin',
   HR_MANAGER: 'hr',
   MANAGER: 'manager',
+  PROJECT_MANAGER: 'project_manager',
   WORKER: 'worker',
 };
 
@@ -74,8 +75,8 @@ export const authApi = {
   /** Confirms a restored token is still good; 401 clears the session. */
   me: () => api.get('/api/auth/me').then((r) => toUiUser(r.data)),
 
-  /** Used to populate the manager picker when creating a team. */
-  listUsers: (role?: 'SYSTEM_ADMIN' | 'HR_MANAGER' | 'MANAGER' | 'WORKER') =>
+  /** Used to populate the manager/project-manager pickers on create forms. */
+  listUsers: (role?: 'SYSTEM_ADMIN' | 'HR_MANAGER' | 'MANAGER' | 'PROJECT_MANAGER' | 'WORKER') =>
     api
       .get('/api/users', { params: role ? { role } : undefined })
       .then((r) =>

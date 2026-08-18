@@ -17,6 +17,9 @@ export interface Worker { id:number; user_id:number|null; team_id:number; team_n
 export interface Assignment { id:number; worker_id:number; worker_name:string; team_id:number; team_name:string; manager_id:number; manager_name:string; title:string; description:string; start_date:string; end_date:string; status:string }
 export interface Entry { work_date:string; hours:number }
 export interface Timesheet { id:number; worker_id:number; worker_name:string; assignment_id:number; assignment_title:string; week_start:string; week_end:string; status:'DRAFT'|'SUBMITTED'; total_hours:number; submitted_at:string|null; entries:Entry[] }
+export interface Contract { id:number; project_name:string; start_date:string; end_date:string; duration_in_months:number; manager_id:number; manager_name:string; created_by_admin_id:number; created_by_admin_name:string }
+export type InvoiceStatus = 'DRAFT'|'PENDING_APPROVAL'|'APPROVED'|'REJECTED';
+export interface Invoice { id:number; contract_id:number; contract_project_name:string; manager_id:number; manager_name:string; project_manager_id:number; project_manager_name:string; period_start:string; period_end:string; amount:number; notes:string|null; decision_notes:string|null; status:InvoiceStatus }
 
 const role = (): Role | undefined => (useAuthStore.getState().user as any)?.role;
 
@@ -104,6 +107,34 @@ const mapTimesheet = (t: any): Timesheet => ({
 
 const toEntryPayload = (entries: Entry[]) =>
   entries.map((e) => ({ workDate: e.work_date, hours: Number(e.hours) }));
+
+const mapContract = (c: any): Contract => ({
+  id: c.id,
+  project_name: c.projectName,
+  start_date: c.startDate,
+  end_date: c.endDate,
+  duration_in_months: c.durationInMonths,
+  manager_id: c.managerId,
+  manager_name: c.managerName,
+  created_by_admin_id: c.createdByAdminId,
+  created_by_admin_name: c.createdByAdminName,
+});
+
+const mapInvoice = (i: any): Invoice => ({
+  id: i.id,
+  contract_id: i.contractId,
+  contract_project_name: i.contractProjectName,
+  manager_id: i.managerId,
+  manager_name: i.managerName,
+  project_manager_id: i.projectManagerId,
+  project_manager_name: i.projectManagerName,
+  period_start: i.periodStart,
+  period_end: i.periodEnd,
+  amount: Number(i.amount),
+  notes: i.notes,
+  decision_notes: i.decisionNotes,
+  status: i.status,
+});
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
@@ -195,4 +226,44 @@ export const workforceApi = {
 
   submitTimesheet: (id: number) =>
     api.post(`/api/timesheets/${id}/submit`).then((r) => mapTimesheet(r.data)),
+
+  contracts: () =>
+    api.get('/api/contracts', { params: PAGE }).then((r) => unwrap(r).map(mapContract)),
+
+  createContract: (data: any) =>
+    api
+      .post('/api/contracts', {
+        projectName: data.project_name,
+        startDate: data.start_date,
+        durationInMonths: Number(data.duration_in_months),
+        managerId: Number(data.manager_id),
+      })
+      .then((r) => mapContract(r.data)),
+
+  /** Scoped server-side: admin/HR see the org, a manager only invoices they raised, a project manager only invoices assigned to them. */
+  invoices: (params?: any) =>
+    api
+      .get('/api/invoices', { params: { ...PAGE, ...params } })
+      .then((r) => unwrap(r).map(mapInvoice)),
+
+  createInvoice: (data: any) =>
+    api
+      .post('/api/invoices', {
+        contractId: Number(data.contract_id),
+        projectManagerId: Number(data.project_manager_id),
+        periodStart: data.period_start,
+        periodEnd: data.period_end,
+        amount: Number(data.amount),
+        notes: data.notes || null,
+      })
+      .then((r) => mapInvoice(r.data)),
+
+  submitInvoice: (id: number) =>
+    api.post(`/api/invoices/${id}/submit`).then((r) => mapInvoice(r.data)),
+
+  approveInvoice: (id: number, notes?: string) =>
+    api.post(`/api/invoices/${id}/approve`, { notes: notes || null }).then((r) => mapInvoice(r.data)),
+
+  rejectInvoice: (id: number, notes: string) =>
+    api.post(`/api/invoices/${id}/reject`, { notes }).then((r) => mapInvoice(r.data)),
 };
