@@ -60,6 +60,13 @@ public interface WorkerRepository extends JpaRepository<Worker, Long> {
 			@Param("status") WorkerStatus status,
 			Pageable pageable);
 
+	long countByOrganizationId(Long organizationId);
+
+	long countByOrganizationIdAndStatus(Long organizationId, WorkerStatus status);
+
+	@Query("SELECT COUNT(w) FROM Worker w WHERE w.team.manager.id = :managerId")
+	long countByTeamManagerId(@Param("managerId") Long managerId);
+
 	/** Ownership check for manager-scoped reads, answered by the database. */
 	@Query("""
 			SELECT COUNT(w) > 0 FROM Worker w

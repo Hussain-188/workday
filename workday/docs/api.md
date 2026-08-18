@@ -133,6 +133,26 @@ never trust it client-side for authorization decisions:
 Auth is **stateless**: there is no session, no refresh token and no logout
 endpoint in MVP 1. When `exp` passes, log in again.
 
+### `GET /api/auth/me`
+
+Confirms a token restored from storage is still valid, and returns who it
+belongs to. Call this on app boot before rendering; a `401` is your signal to
+clear the stored session and show the login screen.
+
+```json
+{
+  "userId": 5,
+  "name": "John Carter",
+  "email": "john@example.com",
+  "role": "WORKER",
+  "organizationId": 1,
+  "organizationName": "Acme Corporation",
+  "workerId": 1
+}
+```
+
+`workerId` is present only for `WORKER` accounts.
+
 ---
 
 ## 3. Errors
@@ -199,6 +219,9 @@ This distinction matters for your UI:
 | Endpoint | `SYSTEM_ADMIN` | `HR_MANAGER` | `MANAGER` | `WORKER` |
 | --- | :-: | :-: | :-: | :-: |
 | `POST /api/auth/login` | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/auth/me` | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/users` | ✅ org | ✅ org | — | — |
+| `GET /api/dashboard/summary` | ✅ org | ✅ org | ✅ own teams | ✅ self |
 | `POST /api/workers` | ✅ | ✅ | — | — |
 | `GET /api/workers` | ✅ org | ✅ org | ✅ own teams | — |
 | `GET /api/workers/me` | — | — | — | ✅ self |
@@ -216,6 +239,7 @@ This distinction matters for your UI:
 | `PATCH /api/assignments/{id}/status` | ✅ | — | ✅ own teams | — |
 | `POST /api/timesheets` | — | — | — | ✅ self |
 | `GET /api/timesheets/my` | — | — | — | ✅ self |
+| `GET /api/timesheets` | ✅ org | ✅ org | ✅ own teams | — |
 | `GET /api/timesheets/{id}` | ✅ org | ✅ org | ✅ own teams | ✅ self only |
 | `PUT /api/timesheets/{id}/entries` | — | — | — | ✅ own draft |
 | `POST /api/timesheets/{id}/submit` | — | — | — | ✅ own draft |
@@ -370,8 +394,12 @@ Role: `SYSTEM_ADMIN` only.
 ```
 
 `managerId` must be a `MANAGER`-role user in your organization; anything else
-returns `403 FORBIDDEN_OPERATION`. `code` must be unique **within the
-organization** (`409 DUPLICATE_RESOURCE`).
+returns `403 FORBIDDEN_OPERATION`.
+
+`code` is **optional** — omit it and the server derives a slug from the name
+("Mobile Engineering" → `MOBILE-ENGINEERING`), appending `-2`, `-3`… if that
+slug is taken, so a form that only asks for a name can never collide. When you
+do send one it must be unique within the organization (`409 DUPLICATE_RESOURCE`).
 
 **Response `201`** — a `TeamResponse`:
 
@@ -431,7 +459,7 @@ Roles: `MANAGER`, `SYSTEM_ADMIN`.
 
 | Field | Required | Rules |
 | --- | --- | --- |
-| `teamId` | yes | `ACTIVE` team in your organization |
+| `teamId` | no | defaults to the worker's own team; still validated when sent |
 | `workerId` | yes | `ACTIVE` worker **already on that team** |
 | `title` | yes | ≤ 200 chars |
 | `description` | no | ≤ 2000 chars |
@@ -612,6 +640,15 @@ then sets `status` to `SUBMITTED`.
 Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS`,
 `409 INVALID_TIMESHEET_STATE` (already submitted).
 
+### `GET /api/timesheets`
+
+Roles: `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`. Paginated `TimesheetResponse`,
+scoped by role: the whole organization for admin/HR, only their own teams for a
+manager. Optional `status` filter. Workers get `403` — they have `/my`.
+
+Use this rather than `/api/manager/timesheets` if the caller may be HR, since
+the manager facade is admin/manager only.
+
 ### `GET /api/timesheets/my`
 
 Role: `WORKER`. The caller's history, newest week first by default. Optional
@@ -623,6 +660,43 @@ Any role, ownership-scoped: the worker who owns it, the manager of its team, or
 an admin/HR user in the organization.
 
 ---
+
+## 8b. Users and dashboard
+
+### `GET /api/users?role=MANAGER`
+
+Roles: `SYSTEM_ADMIN`, `HR_MANAGER`. A read-only directory of login identities
+in your organization, filtered by `role` when supplied. It exists so an admin
+can pick a manager when creating a team; it is not a user-management surface
+and never returns a password hash. Returns a plain array, not a page.
+
+```json
+[
+  { "id": 3, "name": "David Miller", "email": "manager@example.com",
+    "role": "MANAGER", "status": "ACTIVE" }
+]
+```
+
+### `GET /api/dashboard/summary`
+
+Any role. Headline counts for the landing screen, **shaped by who is asking**.
+The keys differ per role, so render them generically (iterate the object) rather
+than hard-coding field names:
+
+| Role | Keys returned |
+| --- | --- |
+| `SYSTEM_ADMIN`, `HR_MANAGER` | `total_workers`, `active_workers`, `offboarded_workers`, `teams`, `active_assignments`, `submitted_timesheets` |
+| `MANAGER` | `my_teams`, `my_workers`, `active_assignments`, `submitted_timesheets`, `draft_timesheets` |
+| `WORKER` | `active_assignments`, `draft_timesheets`, `submitted_timesheets`, `hours_submitted` |
+
+```json
+{ "my_teams": 1, "my_workers": 2, "active_assignments": 2,
+  "submitted_timesheets": 1, "draft_timesheets": 0 }
+```
+
+Every figure is scoped: a manager's counts cover only teams they manage, and a
+worker's only their own records. Keys are snake_case so they render as readable
+labels after replacing underscores with spaces.
 
 ## 9. Manager endpoints
 

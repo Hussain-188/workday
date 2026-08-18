@@ -16,6 +16,7 @@ import com.hackathon.workday.user.User;
 import com.hackathon.workday.user.UserRepository;
 import com.hackathon.workday.worker.Worker;
 import com.hackathon.workday.worker.WorkerRepository;
+import java.util.Locale;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -46,9 +47,10 @@ public class TeamService {
 
 	@Transactional
 	public TeamResponse createTeam(CreateTeamRequest request, AuthPrincipal actor) {
-		if (teamRepository.existsByOrganizationIdAndCode(actor.getOrganizationId(), request.code())) {
+		String code = resolveCode(request, actor.getOrganizationId());
+		if (teamRepository.existsByOrganizationIdAndCode(actor.getOrganizationId(), code)) {
 			throw new DuplicateResourceException(
-					"A team already exists with code " + request.code() + " in this organization");
+					"A team already exists with code " + code + " in this organization");
 		}
 
 		Organization organization = organizationRepository.findById(actor.getOrganizationId())
@@ -65,13 +67,38 @@ public class TeamService {
 			throw new UnauthorizedAccessException("That manager belongs to another organization");
 		}
 
-		Team team = new Team(organization, request.name(), request.code(), request.description(), manager);
+		Team team = new Team(organization, request.name(), code, request.description(), manager);
 		teamRepository.save(team);
 
 		auditService.record(actor.getUserId(), AuditAction.TEAM_CREATED, ENTITY, team.getId(),
 				"code=" + team.getCode() + ", managerId=" + manager.getId());
 
 		return teamMapper.toResponse(team);
+	}
+
+	/**
+	 * Uses the supplied code, or derives a slug from the team name when the
+	 * client omits it. A numeric suffix is appended if the slug is taken, so a
+	 * form that only asks for a name can never collide.
+	 */
+	private String resolveCode(CreateTeamRequest request, Long organizationId) {
+		if (request.code() != null && !request.code().isBlank()) {
+			return request.code().trim();
+		}
+
+		String base = request.name().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "-")
+				.replaceAll("(^-|-$)", "");
+		if (base.isBlank()) {
+			base = "TEAM";
+		}
+		base = base.substring(0, Math.min(base.length(), 40));
+
+		String candidate = base;
+		int suffix = 2;
+		while (teamRepository.existsByOrganizationIdAndCode(organizationId, candidate)) {
+			candidate = base + "-" + suffix++;
+		}
+		return candidate;
 	}
 
 	/** A manager's listing is narrowed by the query, not after loading. */

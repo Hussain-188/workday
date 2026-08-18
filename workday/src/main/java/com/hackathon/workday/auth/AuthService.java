@@ -1,8 +1,11 @@
 package com.hackathon.workday.auth;
 
+import com.hackathon.workday.auth.dto.CurrentUserResponse;
 import com.hackathon.workday.auth.dto.LoginRequest;
 import com.hackathon.workday.auth.dto.LoginResponse;
 import com.hackathon.workday.common.exception.ForbiddenOperationException;
+import com.hackathon.workday.common.exception.ResourceNotFoundException;
+import com.hackathon.workday.security.AuthPrincipal;
 import com.hackathon.workday.security.jwt.JwtService;
 import com.hackathon.workday.user.Role;
 import com.hackathon.workday.user.User;
@@ -28,6 +31,29 @@ public class AuthService {
 		this.workerRepository = workerRepository;
 		this.passwordEncoder = passwordEncoder;
 		this.jwtService = jwtService;
+	}
+
+	/**
+	 * Resolves the caller from their token alone. A client that restored a token
+	 * from storage calls this on boot to confirm it is still valid.
+	 */
+	@Transactional(readOnly = true)
+	public CurrentUserResponse currentUser(AuthPrincipal actor) {
+		User user = userRepository.findById(actor.getUserId())
+				.orElseThrow(() -> new ResourceNotFoundException("User", actor.getUserId()));
+
+		Long workerId = user.getRole() == Role.WORKER
+				? workerRepository.findByUserId(user.getId()).map(Worker::getId).orElse(null)
+				: null;
+
+		return new CurrentUserResponse(
+				user.getId(),
+				user.getName(),
+				user.getEmail(),
+				user.getRole(),
+				user.getOrganization().getId(),
+				user.getOrganization().getName(),
+				workerId);
 	}
 
 	@Transactional(readOnly = true)

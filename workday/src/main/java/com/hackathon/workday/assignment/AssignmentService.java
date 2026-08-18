@@ -56,7 +56,25 @@ public class AssignmentService {
 			throw new InvalidAssignmentException("endDate must not precede startDate");
 		}
 
-		Team team = teamService.requireTeam(request.teamId(), actor);
+		Worker worker = workerRepository.findWithDetailsById(request.workerId())
+				.orElseThrow(() -> new ResourceNotFoundException("Worker", request.workerId()));
+
+		if (!worker.getOrganization().getId().equals(actor.getOrganizationId())) {
+			throw new UnauthorizedAccessException("That worker belongs to another organization");
+		}
+
+		// teamId is optional: an omitted one means "the worker's own team". It is
+		// resolved before the ownership checks, so a derived team is validated
+		// exactly as strictly as an explicitly supplied one.
+		Long targetTeamId = request.teamId() != null
+				? request.teamId()
+				: worker.getTeam() != null ? worker.getTeam().getId() : null;
+		if (targetTeamId == null) {
+			throw new InvalidAssignmentException(
+					"Worker " + worker.getId() + " is not on a team, so teamId must be supplied");
+		}
+
+		Team team = teamService.requireTeam(targetTeamId, actor);
 		if (!team.isActive()) {
 			throw new InvalidAssignmentException("Team " + team.getId() + " is not active");
 		}
@@ -64,13 +82,6 @@ public class AssignmentService {
 		// A manager may only create work on a team they actually manage.
 		if (actor.hasRole(Role.MANAGER) && !team.isManagedBy(actor.getUserId())) {
 			throw new UnauthorizedAccessException("You do not manage this team");
-		}
-
-		Worker worker = workerRepository.findWithDetailsById(request.workerId())
-				.orElseThrow(() -> new ResourceNotFoundException("Worker", request.workerId()));
-
-		if (!worker.getOrganization().getId().equals(actor.getOrganizationId())) {
-			throw new UnauthorizedAccessException("That worker belongs to another organization");
 		}
 		// An offboarded or inactive worker cannot take on new work.
 		if (!worker.isActive()) {

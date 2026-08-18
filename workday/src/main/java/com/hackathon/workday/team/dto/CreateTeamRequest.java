@@ -5,6 +5,8 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 /**
+ * @param code optional; derived from the name when omitted, so a simple form
+ *        need not ask for it. Must be unique within the organization.
  * @param managerId a MANAGER-role user in the same organization; the team's
  *        single owner for MVP 1
  */
@@ -13,7 +15,6 @@ public record CreateTeamRequest(
 		@Size(max = 150, message = "name must not exceed 150 characters")
 		String name,
 
-		@NotBlank(message = "code is required")
 		@Size(max = 50, message = "code must not exceed 50 characters")
 		String code,
 

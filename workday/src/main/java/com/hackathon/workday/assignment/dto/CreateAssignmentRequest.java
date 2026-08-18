@@ -9,10 +9,11 @@ import java.time.LocalDate;
  * The owning manager is deliberately absent: it is derived from the caller's
  * token (or the team's manager when an admin acts), never accepted as input.
  *
+ * @param teamId optional; defaults to the worker's own team. When supplied it
+ *        is still validated, so the worker must actually belong to it.
  * @param endDate optional; an open-ended assignment has no end date
  */
 public record CreateAssignmentRequest(
-		@NotNull(message = "teamId is required")
 		Long teamId,
 
 		@NotNull(message = "workerId is required")

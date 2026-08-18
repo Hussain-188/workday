@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.*
+# The committed template is the one exception: it carries no secrets.
+!.env.example
+*.local
+*.log
+.DS_Store

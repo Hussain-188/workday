@@ -50,4 +50,31 @@ public interface TimesheetRepository extends JpaRepository<Timesheet, Long> {
 	@EntityGraph(attributePaths = {"assignment", "assignment.worker", "assignment.worker.user", "assignment.team"})
 	@Query("SELECT t FROM Timesheet t WHERE t.assignment.team.organization.id = :organizationId")
 	Page<Timesheet> findByOrganizationId(@Param("organizationId") Long organizationId, Pageable pageable);
+
+	@Query("""
+			SELECT COUNT(t) FROM Timesheet t
+			WHERE t.assignment.team.organization.id = :organizationId AND t.status = :status
+			""")
+	long countByOrganizationIdAndStatus(
+			@Param("organizationId") Long organizationId,
+			@Param("status") TimesheetStatus status);
+
+	@Query("SELECT COUNT(t) FROM Timesheet t WHERE t.assignment.team.manager.id = :managerId AND t.status = :status")
+	long countByTeamManagerIdAndStatus(
+			@Param("managerId") Long managerId,
+			@Param("status") TimesheetStatus status);
+
+	@Query("SELECT COUNT(t) FROM Timesheet t WHERE t.assignment.worker.id = :workerId AND t.status = :status")
+	long countByWorkerIdAndStatus(
+			@Param("workerId") Long workerId,
+			@Param("status") TimesheetStatus status);
+
+	/** Sum of submitted hours, used for the worker's dashboard tile. */
+	@Query("""
+			SELECT COALESCE(SUM(t.totalHours), 0) FROM Timesheet t
+			WHERE t.assignment.worker.id = :workerId AND t.status = :status
+			""")
+	java.math.BigDecimal sumHoursByWorkerIdAndStatus(
+			@Param("workerId") Long workerId,
+			@Param("status") TimesheetStatus status);
 }

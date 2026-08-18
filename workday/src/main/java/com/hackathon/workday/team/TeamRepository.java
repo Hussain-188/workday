@@ -23,4 +23,8 @@ public interface TeamRepository extends JpaRepository<Team, Long> {
 	Optional<Team> findWithManagerById(Long id);
 
 	boolean existsByOrganizationIdAndCode(Long organizationId, String code);
+
+	long countByOrganizationId(Long organizationId);
+
+	long countByOrganizationIdAndManagerId(Long organizationId, Long managerId);
 }
