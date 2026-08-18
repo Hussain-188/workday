@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.hackathon.workday.assignment.Assignment;
+import com.hackathon.workday.contract.Contract;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.support.IntegrationTestBase;
 import com.hackathon.workday.team.Team;
@@ -30,14 +31,16 @@ class WorkerLifecycleIntegrationTest extends IntegrationTestBase {
 	private Organization acme;
 	private Team backend;
 	private User manager;
+	private Contract contract;
 
 	@BeforeEach
 	void setUp() {
 		acme = givenOrganization("Acme Corporation", "ACME");
-		givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
+		User admin = givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
 		givenUser(acme, "Anita Sharma", "hr@example.com", Role.HR_MANAGER);
 		manager = givenUser(acme, "David Miller", "manager@example.com", Role.MANAGER);
 		backend = givenTeam(acme, "Backend Engineering", "BACKEND", manager);
+		contract = givenContract(manager, admin, "Website Migration");
 	}
 
 	private Map<String, Object> onboardPayload(String email, String code) {
@@ -127,11 +130,17 @@ class WorkerLifecycleIntegrationTest extends IntegrationTestBase {
 		assertThat(workerRepository.findById(john.getId())).isPresent();
 	}
 
+	/**
+	 * MVP 2: an offboarded worker no longer blocks assignment creation — a
+	 * team-owned assignment names no worker at all. What it must still block is
+	 * that worker opening any new billable week for themselves.
+	 */
 	@Test
-	@DisplayName("6. an offboarded worker cannot receive a new assignment")
-	void offboardedWorkerCannotBeAssigned() throws Exception {
+	@DisplayName("6. an offboarded worker cannot open a new timesheet")
+	void offboardedWorkerCannotOpenTimesheet() throws Exception {
 		Worker john = givenWorker(acme, "John Carter", "john@example.com",
 				"EMP-1001", WorkerType.CONTRACTOR, backend);
+		Assignment migration = givenAssignment(backend, contract, manager, "Website Migration");
 
 		String hrToken = tokenFor("hr@example.com");
 		mockMvc.perform(post("/api/workers/" + john.getId() + "/offboard")
@@ -140,17 +149,16 @@ class WorkerLifecycleIntegrationTest extends IntegrationTestBase {
 						.content("{}"))
 				.andExpect(status().isOk());
 
-		String managerToken = tokenFor("manager@example.com");
-		mockMvc.perform(post("/api/assignments")
-						.header(HttpHeaders.AUTHORIZATION, bearer(managerToken))
+		String johnToken = tokenFor("john@example.com");
+		mockMvc.perform(post("/api/timesheets")
+						.header(HttpHeaders.AUTHORIZATION, bearer(johnToken))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
-								"teamId", backend.getId(),
-								"workerId", john.getId(),
-								"title", "New Work After Offboarding",
-								"startDate", "2026-09-01"))))
-				.andExpect(status().is(422))
-				.andExpect(jsonPath("$.code").value("INVALID_ASSIGNMENT"));
+								"assignmentId", migration.getId(),
+								"weekStartDate", "2026-09-07",
+								"entries", List.of()))))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("INVALID_TIMESHEET_STATE"));
 	}
 
 	@Test
@@ -158,9 +166,9 @@ class WorkerLifecycleIntegrationTest extends IntegrationTestBase {
 	void offboardingPreservesHistory() throws Exception {
 		Worker john = givenWorker(acme, "John Carter", "john@example.com",
 				"EMP-1001", WorkerType.CONTRACTOR, backend);
-		Assignment migration = givenAssignment(backend, john, manager, "Website Migration");
+		Assignment migration = givenAssignment(backend, contract, manager, "Website Migration");
 
-		Timesheet history = new Timesheet(migration, java.time.LocalDate.of(2026, 7, 6));
+		Timesheet history = new Timesheet(migration, john, java.time.LocalDate.of(2026, 7, 6));
 		history.replaceEntries(List.of(
 				new TimesheetEntry(java.time.LocalDate.of(2026, 7, 6), new BigDecimal("8.00"), null),
 				new TimesheetEntry(java.time.LocalDate.of(2026, 7, 7), new BigDecimal("7.50"), null)));

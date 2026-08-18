@@ -7,8 +7,12 @@ import com.hackathon.workday.common.audit.AuditAction;
 import com.hackathon.workday.common.audit.AuditService;
 import com.hackathon.workday.common.exception.ForbiddenOperationException;
 import com.hackathon.workday.common.exception.InvalidAssignmentException;
+import com.hackathon.workday.common.exception.NoBillableTimesheetsException;
 import com.hackathon.workday.common.exception.ResourceNotFoundException;
 import com.hackathon.workday.common.exception.UnauthorizedAccessException;
+import com.hackathon.workday.contract.Contract;
+import com.hackathon.workday.contract.ContractService;
+import com.hackathon.workday.invoice.InvoiceService;
 import com.hackathon.workday.security.AuthPrincipal;
 import com.hackathon.workday.team.Team;
 import com.hackathon.workday.team.TeamService;
@@ -22,6 +26,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * MVP 2 "Team Assignment" model: work is owned by a whole {@code team}, not a
+ * single worker. Any active worker on that team may later log hours against
+ * it — there is no worker chosen (or validated) at creation time any more.
+ */
 @Service
 public class AssignmentService {
 
@@ -31,24 +40,29 @@ public class AssignmentService {
 	private final WorkerRepository workerRepository;
 	private final UserRepository userRepository;
 	private final TeamService teamService;
+	private final ContractService contractService;
+	private final InvoiceService invoiceService;
 	private final AuditService auditService;
 	private final AssignmentMapper assignmentMapper;
 
 	public AssignmentService(AssignmentRepository assignmentRepository, WorkerRepository workerRepository,
-			UserRepository userRepository, TeamService teamService, AuditService auditService,
-			AssignmentMapper assignmentMapper) {
+			UserRepository userRepository, TeamService teamService, ContractService contractService,
+			InvoiceService invoiceService, AuditService auditService, AssignmentMapper assignmentMapper) {
 		this.assignmentRepository = assignmentRepository;
 		this.workerRepository = workerRepository;
 		this.userRepository = userRepository;
 		this.teamService = teamService;
+		this.contractService = contractService;
+		this.invoiceService = invoiceService;
 		this.auditService = auditService;
 		this.assignmentMapper = assignmentMapper;
 	}
 
 	/**
-	 * Enforces every rule from the assignment invariants in one transaction:
-	 * the team is in the caller's organization and active, the caller manages
-	 * it, the worker is active and on that team, and the dates make sense.
+	 * The team must be in the caller's organization, active, and (for a
+	 * manager) actually managed by the caller. The contract must be in the
+	 * caller's organization. No worker is chosen here — any active worker
+	 * placed on {@code team} afterwards may log hours against this assignment.
 	 */
 	@Transactional
 	public AssignmentResponse createAssignment(CreateAssignmentRequest request, AuthPrincipal actor) {
@@ -56,42 +70,16 @@ public class AssignmentService {
 			throw new InvalidAssignmentException("endDate must not precede startDate");
 		}
 
-		Worker worker = workerRepository.findWithDetailsById(request.workerId())
-				.orElseThrow(() -> new ResourceNotFoundException("Worker", request.workerId()));
-
-		if (!worker.getOrganization().getId().equals(actor.getOrganizationId())) {
-			throw new UnauthorizedAccessException("That worker belongs to another organization");
-		}
-
-		// teamId is optional: an omitted one means "the worker's own team". It is
-		// resolved before the ownership checks, so a derived team is validated
-		// exactly as strictly as an explicitly supplied one.
-		Long targetTeamId = request.teamId() != null
-				? request.teamId()
-				: worker.getTeam() != null ? worker.getTeam().getId() : null;
-		if (targetTeamId == null) {
-			throw new InvalidAssignmentException(
-					"Worker " + worker.getId() + " is not on a team, so teamId must be supplied");
-		}
-
-		Team team = teamService.requireTeam(targetTeamId, actor);
+		Team team = teamService.requireTeam(request.teamId(), actor);
 		if (!team.isActive()) {
 			throw new InvalidAssignmentException("Team " + team.getId() + " is not active");
 		}
-
 		// A manager may only create work on a team they actually manage.
 		if (actor.hasRole(Role.MANAGER) && !team.isManagedBy(actor.getUserId())) {
 			throw new UnauthorizedAccessException("You do not manage this team");
 		}
-		// An offboarded or inactive worker cannot take on new work.
-		if (!worker.isActive()) {
-			throw new InvalidAssignmentException(
-					"Worker " + worker.getId() + " is " + worker.getStatus() + " and cannot receive new assignments");
-		}
-		if (worker.getTeam() == null || !worker.getTeam().getId().equals(team.getId())) {
-			throw new InvalidAssignmentException(
-					"Worker " + worker.getId() + " does not belong to team " + team.getId());
-		}
+
+		Contract contract = contractService.requireContractInOrganization(request.contractId(), actor);
 
 		// The owning manager is the team's manager, never a client-supplied id.
 		User owningManager = actor.hasRole(Role.MANAGER)
@@ -100,13 +88,13 @@ public class AssignmentService {
 				: team.getManager();
 
 		Assignment assignment = new Assignment(
-				team, worker, owningManager,
+				team, contract, owningManager,
 				request.title(), request.description(),
-				request.startDate(), request.endDate());
+				request.startDate(), request.endDate(), request.allocatedHours());
 		assignmentRepository.save(assignment);
 
 		auditService.record(actor.getUserId(), AuditAction.ASSIGNMENT_CREATED, ENTITY, assignment.getId(),
-				"workerId=" + worker.getId() + ", teamId=" + team.getId());
+				"teamId=" + team.getId() + ", contractId=" + contract.getId());
 
 		return assignmentMapper.toResponse(assignment);
 	}
@@ -128,13 +116,19 @@ public class AssignmentService {
 		return assignments.map(assignmentMapper::toResponse);
 	}
 
-	/** The caller's own assignments, resolved from the token, not a parameter. */
+	/**
+	 * The caller's own assignments: since MVP 2 owns assignments by team, this
+	 * is every assignment on the worker's own team, not a personal list.
+	 */
 	@Transactional(readOnly = true)
 	public Page<AssignmentResponse> listOwnAssignments(AuthPrincipal actor, AssignmentStatus status, Pageable pageable) {
 		Worker self = requireSelfWorker(actor);
+		if (self.getTeam() == null) {
+			return Page.empty(pageable);
+		}
 		Page<Assignment> assignments = status == null
-				? assignmentRepository.findByWorkerId(self.getId(), pageable)
-				: assignmentRepository.findByWorkerIdAndStatus(self.getId(), status, pageable);
+				? assignmentRepository.findByTeamId(self.getTeam().getId(), pageable)
+				: assignmentRepository.findByTeamIdAndStatus(self.getTeam().getId(), status, pageable);
 		return assignments.map(assignmentMapper::toResponse);
 	}
 
@@ -173,19 +167,33 @@ public class AssignmentService {
 		auditService.record(actor.getUserId(), AuditAction.ASSIGNMENT_STATUS_CHANGED, ENTITY, assignment.getId(),
 				previous + " -> " + request.status());
 
+		// MVP 3 Automated Handoff: completing the milestone bills every SUBMITTED
+		// timesheet on the contract straight to the named project manager. No
+		// project manager named, or nothing billable yet, and completion still
+		// succeeds — raising the invoice is a bonus, never a precondition.
+		if (request.status() == AssignmentStatus.COMPLETED && request.projectManagerId() != null) {
+			try {
+				invoiceService.generateInvoiceForContract(assignment.getContract().getId(),
+						assignment.getContract().getManager().getId(), request.projectManagerId());
+			} catch (NoBillableTimesheetsException ex) {
+				// Nothing submitted (or resolved) to bill yet; the assignment still completes.
+			}
+		}
+
 		return assignmentMapper.toResponse(assignment);
 	}
 
 	/**
 	 * Shared with the timesheet module: loads an assignment and proves the
-	 * caller is the worker it belongs to.
+	 * caller is on the team it belongs to — every team member may log hours
+	 * against team-owned work, not just one designated worker.
 	 */
 	@Transactional(readOnly = true)
 	public Assignment requireOwnAssignment(Long assignmentId, AuthPrincipal actor) {
 		Assignment assignment = requireAssignment(assignmentId);
 		Worker self = requireSelfWorker(actor);
-		if (!assignment.getWorker().getId().equals(self.getId())) {
-			throw new UnauthorizedAccessException("This assignment does not belong to you");
+		if (self.getTeam() == null || !assignment.getTeam().getId().equals(self.getTeam().getId())) {
+			throw new UnauthorizedAccessException("This assignment does not belong to your team");
 		}
 		return assignment;
 	}
@@ -224,8 +232,8 @@ public class AssignmentService {
 					"Project managers cannot view assignments");
 			case WORKER -> {
 				Worker self = requireSelfWorker(actor);
-				if (!assignment.getWorker().getId().equals(self.getId())) {
-					throw new UnauthorizedAccessException("You may only view your own assignments");
+				if (self.getTeam() == null || !assignment.getTeam().getId().equals(self.getTeam().getId())) {
+					throw new UnauthorizedAccessException("You may only view assignments on your own team");
 				}
 			}
 		}

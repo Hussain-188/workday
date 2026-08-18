@@ -56,12 +56,15 @@ and returns this envelope:
 | Worker `status` | `ACTIVE`, `INACTIVE`, `OFFBOARDED` |
 | Team `status` | `ACTIVE`, `INACTIVE` |
 | Assignment `status` | `ACTIVE`, `COMPLETED`, `CANCELLED` |
-| Timesheet `status` | `DRAFT`, `SUBMITTED` |
+| Timesheet `status` | `DRAFT`, `SUBMITTED`, `NEEDS_REVIEW` |
 | Invoice `status` | `DRAFT`, `PENDING_APPROVAL`, `APPROVED`, `REJECTED` |
 
-> There is **no** `APPROVED` or `REJECTED` timesheet status in MVP 1.
+> There is still **no** `APPROVED` or `REJECTED` timesheet status.
 > `SUBMITTED` means "the worker finished entering this week", not "a manager
-> approved it". Approval arrives in a later MVP.
+> approved it". `NEEDS_REVIEW` (MVP 3) is a narrow exception — only reached
+> when a submission pushes the team over an assignment's `allocatedHours`
+> budget — and even that resolves back to `SUBMITTED`, never to a distinct
+> approved state. See §8.
 
 ---
 
@@ -195,6 +198,7 @@ Branch on `code`, not on `message` — messages may be reworded.
 | `422` | `INVALID_ASSIGNMENT` | assignment business rule broken |
 | `422` | `INVALID_TIMESHEET_ENTRY` | hours or work date rejected |
 | `422` | `INVALID_CONTRACT` | contract business rule broken (e.g. non-positive duration) |
+| `422` | `NO_BILLABLE_TIMESHEETS` | Milestone Billing generation found no SUBMITTED timesheets to bill |
 | `500` | `INTERNAL_ERROR` | unexpected; nothing internal is exposed |
 
 `fieldErrors` is populated only for `VALIDATION_FAILED`:
@@ -246,12 +250,15 @@ This distinction matters for your UI:
 | `GET /api/timesheets/{id}` | ✅ org | ✅ org | ✅ own teams | — | ✅ self only |
 | `PUT /api/timesheets/{id}/entries` | — | — | — | — | ✅ own draft |
 | `POST /api/timesheets/{id}/submit` | — | — | — | — | ✅ own draft |
+| `POST /api/timesheets/{id}/review` | — | — | ✅ own teams | — | — |
 | `POST /api/contracts` | ✅ | — | — | — | — |
 | `GET /api/contracts` | ✅ org | ✅ org | ✅ own only | — | — |
 | `GET /api/contracts/{id}` | ✅ org | ✅ org | ✅ own only | — | — |
+| `POST /api/invoices/generate` | — | — | ✅ own contracts | — | — |
 | `POST /api/invoices` | — | — | ✅ own contracts | — | — |
 | `GET /api/invoices` | ✅ org | ✅ org | ✅ raised by them | ✅ assigned to them | — |
 | `GET /api/invoices/{id}` | ✅ org | ✅ org | ✅ raised by them | ✅ assigned to them | — |
+| `GET /api/invoices/{id}/pdf` | ✅ org | ✅ org | ✅ raised by them | ✅ assigned to them | — |
 | `POST /api/invoices/{id}/submit` | — | — | ✅ own draft | — | — |
 | `POST /api/invoices/{id}/approve` | — | — | — | ✅ assigned to them | — |
 | `POST /api/invoices/{id}/reject` | — | — | — | ✅ assigned to them | — |
@@ -279,7 +286,8 @@ employment record in one transaction.
   "employeeCode": "EMP-1001",
   "workerType": "CONTRACTOR",
   "employmentStartDate": "2026-06-01",
-  "teamId": 1
+  "teamId": 1,
+  "hourlyRate": 50.00
 }
 ```
 
@@ -292,6 +300,7 @@ employment record in one transaction.
 | `workerType` | yes | one of the `workerType` enum |
 | `employmentStartDate` | yes | date |
 | `teamId` | no | must be an `ACTIVE` team in your organization |
+| `hourlyRate` | no | ≥ 0, 2 decimals; defaults to `0.00`. Drives Milestone Billing (§11) — submitted hours against this worker are billed at this rate |
 
 **Response `201`** — a `WorkerResponse`:
 
@@ -305,6 +314,7 @@ employment record in one transaction.
   "workerType": "CONTRACTOR",
   "employmentStartDate": "2026-06-01",
   "employmentEndDate": null,
+  "hourlyRate": 50.00,
   "status": "ACTIVE",
   "teamId": 1,
   "teamName": "Backend Engineering",
@@ -353,7 +363,8 @@ left unchanged.
   "employmentStartDate": "2026-06-01",
   "employmentEndDate": null,
   "teamId": 2,
-  "status": "INACTIVE"
+  "status": "INACTIVE",
+  "hourlyRate": 55.00
 }
 ```
 
@@ -451,9 +462,12 @@ Same access rules as above. Paginated `WorkerResponse`.
 
 ## 7. Assignments
 
-An assignment is the MVP 1 unit of work: a manager makes a worker responsible
-for something, and hours are booked against it. It is **not** a task — finer
-task management is a later MVP.
+**MVP 2 — Team Assignment model.** An assignment is owned by a whole `team`
+(via `teamId`) and billed against a `contract`, not handed to one named
+worker. Any `ACTIVE` worker placed on that team may log hours against it —
+there is no `workerId` on this resource any more, and no junction table
+between workers and assignments; `team_id` is the sole ownership column. It
+is **not** a task — finer task management is a later MVP.
 
 ### `POST /api/assignments`
 
@@ -462,25 +476,30 @@ Roles: `MANAGER`, `SYSTEM_ADMIN`.
 ```json
 {
   "teamId": 1,
-  "workerId": 3,
+  "contractId": 1,
   "title": "Website Migration",
   "description": "Migrate the legacy marketing site",
   "startDate": "2026-08-03",
-  "endDate": null
+  "endDate": null,
+  "allocatedHours": 80.00
 }
 ```
 
 | Field | Required | Rules |
 | --- | --- | --- |
-| `teamId` | no | defaults to the worker's own team; still validated when sent |
-| `workerId` | yes | `ACTIVE` worker **already on that team** |
+| `teamId` | yes | must be `ACTIVE`; a manager must manage it |
+| `contractId` | yes | must exist in your organization |
 | `title` | yes | ≤ 200 chars |
 | `description` | no | ≤ 2000 chars |
 | `startDate` | yes | date |
 | `endDate` | no | null = open-ended; otherwise ≥ `startDate` |
+| `allocatedHours` | no | MVP 3: the milestone budget; positive if provided. `null`/omitted means no budget — the Soft Cap Rule (§8) never fires for this assignment |
 
 There is no `managerId` field. The owning manager is taken from your token (or,
-for an admin, the team's manager). A supplied one would be ignored.
+for an admin, the team's manager). A supplied one would be ignored. The
+contract's own manager need not be the same person — an assignment's manager
+and its billing contract's manager are tracked independently; only the
+contract's owner may later generate an invoice from it (§11).
 
 **Response `201`** — an `AssignmentResponse`:
 
@@ -489,9 +508,8 @@ for an admin, the team's manager). A supplied one would be ignored.
   "id": 7,
   "teamId": 1,
   "teamName": "Backend Engineering",
-  "workerId": 3,
-  "workerName": "John Carter",
-  "employeeCode": "EMP-1001",
+  "contractId": 1,
+  "contractProjectName": "Website Migration",
   "managerId": 3,
   "managerName": "David Miller",
   "title": "Website Migration",
@@ -499,6 +517,7 @@ for an admin, the team's manager). A supplied one would be ignored.
   "startDate": "2026-08-03",
   "endDate": null,
   "status": "ACTIVE",
+  "allocatedHours": 80.00,
   "createdAt": "2026-08-18T09:20:00.000Z",
   "updatedAt": "2026-08-18T09:20:00.000Z"
 }
@@ -508,9 +527,7 @@ for an admin, the team's manager). A supplied one would be ignored.
 
 | Status | `code` | Cause |
 | --- | --- | --- |
-| `403` | `UNAUTHORIZED_RESOURCE_ACCESS` | you do not manage that team |
-| `422` | `INVALID_ASSIGNMENT` | worker not on the team |
-| `422` | `INVALID_ASSIGNMENT` | worker is `INACTIVE` or `OFFBOARDED` |
+| `403` | `UNAUTHORIZED_RESOURCE_ACCESS` | you do not manage that team, or the contract belongs to another organization |
 | `422` | `INVALID_ASSIGNMENT` | team is not `ACTIVE` |
 | `422` | `INVALID_ASSIGNMENT` | `endDate` before `startDate` |
 
@@ -521,8 +538,10 @@ Paginated `AssignmentResponse`, scoped to the caller's teams or organization.
 
 ### `GET /api/assignments/my`
 
-Role: `WORKER`. The caller's own assignments, resolved from the token. Optional
-`status` filter — pass `status=ACTIVE` to populate a "log time against" picker.
+Role: `WORKER`. Every assignment on the caller's **own team**, resolved from
+the token — MVP 2 has no personal assignment list, since work is team-owned.
+Optional `status` filter — pass `status=ACTIVE` to populate a "log time
+against" picker.
 
 ### `GET /api/assignments/{id}`
 
@@ -533,7 +552,7 @@ Any role, ownership-scoped as in the permission table.
 Roles: `MANAGER` (own teams only), `SYSTEM_ADMIN`.
 
 ```json
-{ "status": "COMPLETED" }
+{ "status": "COMPLETED", "projectManagerId": 5 }
 ```
 
 Only an `ACTIVE` assignment can change status; `COMPLETED` and `CANCELLED` are
@@ -541,22 +560,45 @@ terminal (`422 INVALID_ASSIGNMENT`). Sending the status it already has is a
 no-op and returns `200`. Closed assignments stay fully readable, and their
 existing timesheets are untouched — they simply accept no new weeks.
 
+**MVP 3 Automated Handoff.** `projectManagerId` is optional and only read when
+`status` is `COMPLETED`. When present, the same call generates a Milestone
+Billing invoice for the assignment's contract (§11) and routes it to that
+project manager — identical arithmetic to `POST /api/invoices/generate`, just
+triggered by completion instead of a separate call. No billable (`SUBMITTED`)
+timesheets yet, or `projectManagerId` omitted, and the status change still
+succeeds — the invoice is a bonus, never a precondition. The response is still
+just the `AssignmentResponse`; fetch `GET /api/invoices` afterward to see what
+was raised.
+
 ---
 
 ## 8. Timesheets
 
-One timesheet = one worker's week against one assignment.
+One timesheet = one worker's week against one assignment. Since an assignment
+is team-owned (§7), **several teammates can each open their own timesheet
+against the same assignment for the same week** — the uniqueness key is
+`(assignmentId, workerId, weekStartDate)`, not just `(assignmentId,
+weekStartDate)`.
 
 **Rules that will shape your UI:**
 
 1. `weekStartDate` **must be a Monday**. The server derives `weekEndDate` as
    Monday + 6, so weeks always run Monday–Sunday.
-2. One timesheet per assignment per week, enforced by a database unique key.
+2. One timesheet per **worker** per assignment per week, enforced by a
+   database unique key — not one per assignment overall.
 3. Every `workDate` must fall inside that week, and each date at most once.
 4. `hours` is `0`–`24` per day.
 5. `totalHours` is **always** computed server-side. Never send it; it is
    ignored if you do.
-6. `DRAFT` is editable, `SUBMITTED` is frozen. There is no approval step.
+6. `DRAFT` is editable, `SUBMITTED` is frozen. There is no approval step on a
+   normal week — approval happens one level up, on the *invoice* raised from
+   these hours (§11).
+7. **MVP 3 Soft Cap Rule.** If the assignment carries an `allocatedHours`
+   budget (§7), a submission that pushes the *team's* total logged hours on
+   it past that budget lands in `NEEDS_REVIEW` instead of `SUBMITTED`. A
+   manager resolves it via `POST /api/timesheets/{id}/review` below, which
+   returns it to `SUBMITTED`. `NEEDS_REVIEW` is a detour, not a gate — it is
+   still not an approval step for the normal case.
 
 ### `POST /api/timesheets`
 
@@ -594,6 +636,7 @@ by `workDate`:
   "weekStartDate": "2026-08-17",
   "weekEndDate": "2026-08-23",
   "totalHours": 39.50,
+  "billableHours": 39.50,
   "status": "DRAFT",
   "entries": [
     { "id": 21, "workDate": "2026-08-17", "hours": 8.00, "notes": "Content audit" },
@@ -648,10 +691,33 @@ Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS` (not your timesheet),
 ### `POST /api/timesheets/{id}/submit`
 
 Role: `WORKER`, own `DRAFT` only. No request body. Recalculates the total,
-then sets `status` to `SUBMITTED`.
+then sets `status` to `SUBMITTED` — or, if the assignment has an
+`allocatedHours` budget and this submission pushes the team's total logged
+hours on it past that budget, to `NEEDS_REVIEW` instead (the MVP 3 Soft Cap
+Rule; see §8 rule 7).
 
 Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS`,
 `409 INVALID_TIMESHEET_STATE` (already submitted).
+
+### `POST /api/timesheets/{id}/review` — MVP 3 Soft Cap Rule resolution
+
+Role: `MANAGER`, own team's timesheet, must currently be `NEEDS_REVIEW`.
+
+```json
+{ "approveOverage": false }
+```
+
+| `approveOverage` | Effect |
+| --- | --- |
+| `true` | "Approve Total Time (Includes Overtime)" — every logged hour becomes billable |
+| `false` | "Approve Allocated Time Only (Cap at Budget)" — billable hours are capped at the assignment's `allocatedHours`; the overage is discarded, never billed |
+
+Either way, `status` returns to `SUBMITTED` so the week is picked up by the
+next Milestone Billing invoice (§11) — billed by `billableHours`, not
+`totalHours`. Returns the updated `TimesheetResponse`.
+
+Errors: `403 UNAUTHORIZED_RESOURCE_ACCESS` (not a team you manage),
+`409 INVALID_TIMESHEET_STATE` (not currently `NEEDS_REVIEW`).
 
 ### `GET /api/timesheets`
 
@@ -806,7 +872,79 @@ DRAFT --(submit)--> PENDING_APPROVAL --(approve)--> APPROVED
 Every transition is a single forward step — there is no un-approving,
 un-rejecting or resubmitting a decided invoice.
 
-### `POST /api/invoices` — generate
+Two ways to raise one:
+
+- **`POST /api/invoices/generate`** — Milestone Billing (Time &amp; Materials):
+  the amount is computed for you from submitted timesheets. This is the
+  primary path.
+- **`POST /api/invoices`** — manual: you supply the period and amount
+  yourself, then submit it as a separate step. Useful for a one-off charge
+  that isn't a straight sum of logged hours.
+
+### `POST /api/invoices/generate` — Milestone Billing (T&amp;M)
+
+Role: `MANAGER`. Computes the amount from every `SUBMITTED` timesheet logged
+against the contract's assignments — **each timesheet's `totalHours` times
+the logging worker's own `hourlyRate`, summed** — and creates the invoice
+straight into `PENDING_APPROVAL`. There is no manual amount entry and no
+separate submit step.
+
+```json
+{
+  "contractId": 1,
+  "projectManagerId": 6
+}
+```
+
+| Field | Required | Rules |
+| --- | --- | --- |
+| `contractId` | yes | must be a contract **you** own |
+| `projectManagerId` | yes | a `PROJECT_MANAGER`-role user in your organization |
+
+`periodStart`/`periodEnd` on the resulting invoice are derived automatically
+— the earliest `weekStartDate` and latest `weekEndDate` among the timesheets
+that were billed.
+
+**Response `201`** — an `InvoiceResponse` with `status: "PENDING_APPROVAL"`:
+
+```json
+{
+  "id": 5,
+  "contractId": 1,
+  "contractProjectName": "Website Migration",
+  "managerId": 3,
+  "managerName": "David Miller",
+  "projectManagerId": 6,
+  "projectManagerName": "Priya Menon",
+  "periodStart": "2026-08-10",
+  "periodEnd": "2026-08-16",
+  "amount": 3400.00,
+  "notes": "Auto-generated from 2 submitted timesheet(s)",
+  "decisionNotes": null,
+  "status": "PENDING_APPROVAL",
+  "createdAt": "2026-08-18T09:40:00.000Z",
+  "updatedAt": "2026-08-18T09:40:00.000Z"
+}
+```
+
+> Example math: worker A logs 20h at $50/hr, worker B logs 10h at $75/hr on
+> the same contract → (20 × 50) + (10 × 75) = **$1,750.00**. Every step is
+> `BigDecimal`, never floating point.
+
+**Errors**
+
+| Status | `code` | Cause |
+| --- | --- | --- |
+| `400` | `VALIDATION_FAILED` | missing `contractId`/`projectManagerId` |
+| `403` | `UNAUTHORIZED_RESOURCE_ACCESS` | not your contract, or the project manager is in another organization |
+| `404` | `RESOURCE_NOT_FOUND` | `contractId` or `projectManagerId` |
+| `422` | `NO_BILLABLE_TIMESHEETS` | the contract has no assignments, or no `SUBMITTED` timesheets exist against them |
+
+Re-running this endpoint does **not** exclude timesheets already billed on a
+previous invoice — there is no "invoiced" flag on a timesheet in this
+release, so avoid generating twice for the same period.
+
+### `POST /api/invoices` — manual
 
 Role: `MANAGER`. Starts as `DRAFT`, not yet visible to the project manager.
 
@@ -894,6 +1032,22 @@ Roles: `SYSTEM_ADMIN`, `HR_MANAGER`, `MANAGER`, `PROJECT_MANAGER`. Paginated
 the organization; a manager sees invoices they raised; a project manager sees
 only invoices routed to them.
 
+### `GET /api/invoices/{id}/pdf` — MVP 3 PDF export
+
+Same roles and visibility rule as `GET /api/invoices/{id}`. Returns
+`Content-Type: application/pdf` with a `Content-Disposition: attachment;
+filename="invoice-{id}.pdf"` header — a browser `fetch` with
+`responseType: 'blob'` (or a plain `<a href>` if the request needs no auth
+header) can hand it straight to the user.
+
+The PDF shows the contract, billing period, manager/project-manager, and a
+per-line breakdown of assignment / worker / hours billed / rate / line amount,
+reconstructed from the same `SUBMITTED` timesheets `POST
+/api/invoices/generate` would bill — `billableHours`, not `totalHours`, so a
+Soft Cap Rule cap (§8) is reflected here too. An invoice with no matching
+timesheets (e.g. raised manually via `POST /api/invoices`) still renders, just
+without the breakdown table.
+
 ---
 
 ## 12. CORS
@@ -914,27 +1068,62 @@ the console before assuming the API is down.
 ## 13. Local test accounts
 
 Available when the backend runs with the `dev` profile. **Every account uses
-the password `Password123!`.**
+the password `Password123!`.** 21 users in total: 1 admin, 2 HR managers, 4
+managers (one per team), 2 project managers, and 12 workers.
 
 | Email | Name | Role | Notes |
 | --- | --- | --- | --- |
-| `admin@example.com` | System Admin | `SYSTEM_ADMIN` | creates teams |
+| `admin@example.com` | System Admin | `SYSTEM_ADMIN` | the only admin |
 | `hr@example.com` | Anita Sharma | `HR_MANAGER` | onboards/offboards |
-| `manager@example.com` | David Miller | `MANAGER` | manages Backend Engineering |
-| `manager2@example.com` | Sarah Chen | `MANAGER` | manages Frontend Engineering |
-| `pm@example.com` | Priya Menon | `PROJECT_MANAGER` | approves invoices on Website Migration |
-| `john@example.com` | John Carter | `WORKER` | `CONTRACTOR`, Backend, `EMP-1001` |
-| `david@example.com` | David Kumar | `WORKER` | `EMPLOYEE`, Backend, `EMP-1002` |
-| `rahul@example.com` | Rahul Nair | `WORKER` | `EMPLOYEE`, Frontend, `EMP-1003` |
+| `hr2@example.com` | Marcus Webb | `HR_MANAGER` | onboards/offboards |
+| `manager@example.com` | David Miller | `MANAGER` | Backend Engineering — Website Migration, Payments Platform |
+| `manager2@example.com` | Sarah Chen | `MANAGER` | Frontend Engineering — Design System Program, Customer Portal Revamp |
+| `manager3@example.com` | Michael Torres | `MANAGER` | Data & Analytics — Analytics Warehouse Migration, Realtime Dashboards |
+| `manager4@example.com` | Elena Rodriguez | `MANAGER` | Mobile Engineering — Mobile App v2, Offline Sync Module |
+| `pm@example.com` | Priya Menon | `PROJECT_MANAGER` | approves David's and Sarah's invoices |
+| `pm2@example.com` | James Anderson | `PROJECT_MANAGER` | approved Sarah's Customer Portal invoice (rejected it, see below) |
+
+**Workers** (all password `Password123!`), by team:
+
+| Email | Name | Team | Type | Rate | Status |
+| --- | --- | --- | --- | --- | --- |
+| `john@example.com` | John Carter | Backend | `CONTRACTOR` | `EMP-1001`, $50.00/hr | `ACTIVE` |
+| `david@example.com` | David Kumar | Backend | `EMPLOYEE` | `EMP-1002`, $65.00/hr | `ACTIVE` |
+| `kevin@example.com` | Kevin Zhao | Backend | `EMPLOYEE` | `EMP-1004`, $60.00/hr | `ACTIVE`, idle (no timesheets) |
+| `rahul@example.com` | Rahul Nair | Frontend | `EMPLOYEE` | `EMP-1003`, $45.00/hr | `ACTIVE` |
+| `lisa@example.com` | Lisa Wong | Frontend | `CONTRACTOR` | `EMP-1005`, $55.00/hr | `ACTIVE` |
+| `omar@example.com` | Omar Farouk | Frontend | `TEMPORARY_WORKER` | `EMP-1006`, $35.00/hr | `INACTIVE` |
+| `nina@example.com` | Nina Patel | Data & Analytics | `EMPLOYEE` | `EMP-1007`, $70.00/hr | `ACTIVE` |
+| `carlos@example.com` | Carlos Mendez | Data & Analytics | `CONTRACTOR` | `EMP-1008`, $58.00/hr | `ACTIVE` |
+| `grace@example.com` | Grace Kim | Data & Analytics | `EMPLOYEE` | `EMP-1009`, $62.00/hr | `OFFBOARDED` |
+| `tom@example.com` | Tom Baker | Mobile | `EMPLOYEE` | `EMP-1010`, $52.00/hr | `ACTIVE` |
+| `aisha@example.com` | Aisha Bello | Mobile | `CONTRACTOR` | `EMP-1011`, $48.00/hr | `ACTIVE` |
+| `yuki@example.com` | Yuki Tanaka | Mobile | `TEMPORARY_WORKER` | `EMP-1012`, $40.00/hr | `ACTIVE`, no timesheets yet |
 
 > David Miller (a manager) and David Kumar (a worker) are two different people.
 > Emails are unique; names are not.
 
-Seeded data: two teams, three active assignments, and one **submitted** week for
-John (week of `2026-08-10`, 40 hours). The week of `2026-08-17` is left free so
-you can create it from the UI. Also one contract (Website Migration, owned by
-David Miller) with two invoices against it: one `PENDING_APPROVAL` in Priya's
-queue and one already `APPROVED`.
+**Seeded structure:** 4 teams, 8 contracts (2 per manager), 8 team-owned
+assignments (1 per contract). **Timesheets:** a full **submitted** week
+(`2026-08-10`–`2026-08-16`, 40 hours) for John, David Kumar, Rahul, Lisa,
+Nina, Carlos and Tom, plus one **DRAFT** (partial, 3 days) for Aisha. John and
+David Kumar both logged the *same* Website Migration assignment for the same
+week — proof that a Team Assignment accepts hours from every teammate.
+Kevin, Omar and Grace deliberately have none. The week of `2026-08-17` is
+left free everywhere so you can create it live from the UI.
+
+**Invoices**, one of each status: `DRAFT` (Design System Program, $1,800),
+`PENDING_APPROVAL` (Payments Platform, $6,400, in Priya's queue),
+`APPROVED` (Payments Platform, $6,400, decided by Priya), `REJECTED`
+(Customer Portal Revamp, $4,950, decided by James — "Hours exceed the
+approved budget for this sprint"). Website Migration and Analytics Warehouse
+Migration are left completely un-invoiced on purpose, so
+`POST /api/invoices/generate` has real submitted hours to bill live:
+
+- Website Migration → David Miller's token, `projectManagerId` for Priya →
+  40h × $50 (John) + 40h × $65 (David Kumar) = **$4,600.00**
+- Analytics Warehouse Migration → Michael Torres's token, `projectManagerId`
+  for Priya or James → 40h × $70 (Nina) + 40h × $58 (Carlos) = **$5,120.00**
 
 ---
 
@@ -952,18 +1141,20 @@ queue and one already `APPROVED`.
 **Manager**
 1. `GET /api/manager/teams` → team switcher
 2. `GET /api/manager/workers` → roster
-3. `POST /api/assignments` → assign work
-4. `GET /api/manager/timesheets?status=SUBMITTED` → weekly review
-5. `PATCH /api/assignments/{id}/status` → close finished work
-6. `GET /api/contracts` → contracts you own
-7. `POST /api/invoices` → generate an invoice once timesheets are verified
-8. `POST /api/invoices/{id}/submit` → route it to the project manager
-9. `GET /api/invoices?status=REJECTED` → see what came back and why
+3. `GET /api/contracts` → contracts you own, to bill against
+4. `POST /api/assignments` (with `allocatedHours`) → open a team assignment against a contract, with a milestone budget
+5. `GET /api/manager/timesheets?status=SUBMITTED` → weekly review
+6. `GET /api/manager/timesheets?status=NEEDS_REVIEW` → the Soft Cap Rule queue
+7. `POST /api/timesheets/{id}/review` → approve the overage or cap it at budget
+8. `PATCH /api/assignments/{id}/status` (with `projectManagerId`) → close finished work, auto-invoicing in the same call
+9. `POST /api/invoices/generate` → bill the SUBMITTED hours in one step (Milestone Billing), when not done via completion
+10. `GET /api/invoices?status=REJECTED` → see what came back and why
 
 **Project Manager**
 1. `GET /api/invoices?status=PENDING_APPROVAL` → approval queue
 2. `GET /api/invoices/{id}` → review the contract, period and amount
-3. `POST /api/invoices/{id}/approve` or `POST /api/invoices/{id}/reject` → decide
+3. `GET /api/invoices/{id}/pdf` → download a formatted copy
+4. `POST /api/invoices/{id}/approve` or `POST /api/invoices/{id}/reject` → decide
 
 **HR**
 1. `GET /api/hr/workers?status=ACTIVE` → roster
@@ -983,11 +1174,12 @@ queue and one already `APPROVED`.
 
 Do not build UI for these; the endpoints do not exist:
 
-- timesheet approval / rejection (timesheets are worker-submitted only; invoice
-  approval is a separate, contract-level workflow — see §11)
+- general timesheet approval / rejection (timesheets are worker-submitted
+  only; the one exception is the narrow Soft Cap Rule review in §8 — invoice
+  approval remains a separate, contract-level workflow — see §11)
 - leave management, task management, work reassignment
-- milestone-based billing (an invoice here is a simple period + amount claim
-  against a contract, not tied to milestones)
+- tracking which timesheets have already been billed (`POST
+  /api/invoices/generate` has no "already invoiced" guard — see §11)
 - re-submitting a `REJECTED` invoice as a new draft (the manager must raise a
   new invoice)
 - user self-registration, password reset, refresh tokens, logout

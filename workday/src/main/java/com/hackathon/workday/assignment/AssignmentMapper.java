@@ -6,15 +6,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class AssignmentMapper {
 
-	/** Expects the team/worker/manager graph to be fetched; see the repository. */
+	/** Expects the team/contract/manager graph to be fetched; see the repository. */
 	public AssignmentResponse toResponse(Assignment assignment) {
 		return new AssignmentResponse(
 				assignment.getId(),
 				assignment.getTeam().getId(),
 				assignment.getTeam().getName(),
-				assignment.getWorker().getId(),
-				assignment.getWorker().getUser().getName(),
-				assignment.getWorker().getEmployeeCode(),
+				assignment.getContract().getId(),
+				assignment.getContract().getProjectName(),
 				assignment.getManager().getId(),
 				assignment.getManager().getName(),
 				assignment.getTitle(),
@@ -22,6 +21,7 @@ public class AssignmentMapper {
 				assignment.getStartDate(),
 				assignment.getEndDate(),
 				assignment.getStatus(),
+				assignment.getAllocatedHours(),
 				assignment.getCreatedAt(),
 				assignment.getUpdatedAt());
 	}

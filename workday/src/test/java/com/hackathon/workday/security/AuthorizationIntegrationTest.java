@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.hackathon.workday.contract.Contract;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.support.IntegrationTestBase;
 import com.hackathon.workday.team.Team;
@@ -29,17 +30,19 @@ class AuthorizationIntegrationTest extends IntegrationTestBase {
 	private Organization globex;
 	private Team backend;
 	private Worker john;
+	private Contract contract;
 
 	@BeforeEach
 	void setUp() {
 		acme = givenOrganization("Acme Corporation", "ACME");
 		globex = givenOrganization("Globex", "GLOBEX");
 
-		givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
+		User admin = givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
 		givenUser(acme, "Anita Sharma", "hr@example.com", Role.HR_MANAGER);
 		User david = givenUser(acme, "David Miller", "manager@example.com", Role.MANAGER);
 		backend = givenTeam(acme, "Backend Engineering", "BACKEND", david);
 		john = givenWorker(acme, "John Carter", "john@example.com", "EMP-1001", WorkerType.CONTRACTOR, backend);
+		contract = givenContract(david, admin, "Website Migration");
 
 		// A separate organization, to prove the tenancy boundary holds.
 		User outsideManager = givenUser(globex, "Otto Vance", "otto@globex.com", Role.MANAGER);
@@ -80,7 +83,7 @@ class AuthorizationIntegrationTest extends IntegrationTestBase {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
 								"teamId", backend.getId(),
-								"workerId", john.getId(),
+								"contractId", contract.getId(),
 								"title", "Unauthorised work",
 								"startDate", "2026-08-03"))))
 				.andExpect(status().isForbidden());

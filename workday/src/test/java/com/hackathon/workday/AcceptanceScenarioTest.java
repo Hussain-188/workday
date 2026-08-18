@@ -100,17 +100,34 @@ class AcceptanceScenarioTest extends IntegrationTestBase {
 				.andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].name").value("John Carter"));
 
-		// STEP 7 — David assigns John to the Website Migration project.
+		// STEP 6b — the admin creates a contract for the project, owned by David.
+		// MVP 2: every team assignment bills against a contract.
+		String contractJson = mockMvc.perform(post("/api/contracts")
+						.header(HttpHeaders.AUTHORIZATION, bearer(adminToken))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(json(Map.of(
+								"projectName", "Website Migration",
+								"startDate", "2026-06-01",
+								"durationInMonths", 6,
+								"managerId", david.getId()))))
+				.andExpect(status().isCreated())
+				.andReturn().getResponse().getContentAsString();
+		long contractId = ((Number) objectMapper.readValue(contractJson, Map.class).get("id")).longValue();
+
+		// STEP 7 — David opens a Team Assignment on Backend Engineering, billed
+		// against that contract. MVP 2: no single worker is named — any active
+		// worker on the team may log hours against it.
 		String assignmentJson = mockMvc.perform(post("/api/assignments")
 						.header(HttpHeaders.AUTHORIZATION, bearer(davidToken))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
 								"teamId", teamId,
-								"workerId", johnWorkerId,
+								"contractId", contractId,
 								"title", "Website Migration",
 								"description", "Migrate the legacy marketing site",
 								"startDate", "2026-08-03"))))
 				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.contractId").value(contractId))
 				.andReturn().getResponse().getContentAsString();
 		long assignmentId = ((Number) objectMapper.readValue(assignmentJson, Map.class).get("id")).longValue();
 
@@ -218,17 +235,18 @@ class AcceptanceScenarioTest extends IntegrationTestBase {
 				.andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].totalHours").value(39.50));
 
-		// STEP 17 — new work for an offboarded worker is refused.
-		mockMvc.perform(post("/api/assignments")
-						.header(HttpHeaders.AUTHORIZATION, bearer(davidToken))
+		// STEP 17 — MVP 2: assignments are team-owned, so offboarding no longer
+		// blocks assignment creation itself; it blocks the offboarded worker from
+		// opening any further billable week of their own.
+		mockMvc.perform(post("/api/timesheets")
+						.header(HttpHeaders.AUTHORIZATION, bearer(tokenFor("john@example.com")))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
-								"teamId", teamId,
-								"workerId", johnWorkerId,
-								"title", "Follow-up work",
-								"startDate", "2026-09-01"))))
-				.andExpect(status().is(422))
-				.andExpect(jsonPath("$.code").value("INVALID_ASSIGNMENT"));
+								"assignmentId", assignmentId,
+								"weekStartDate", "2026-09-07",
+								"entries", List.of()))))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("INVALID_TIMESHEET_STATE"));
 
 		// The lifecycle left a readable audit trail behind it.
 		List<AuditAction> actions = auditLogRepository.findAll().stream()
@@ -237,6 +255,7 @@ class AcceptanceScenarioTest extends IntegrationTestBase {
 		assertThat(actions).contains(
 				AuditAction.TEAM_CREATED,
 				AuditAction.WORKER_ONBOARDED,
+				AuditAction.CONTRACT_CREATED,
 				AuditAction.ASSIGNMENT_CREATED,
 				AuditAction.TIMESHEET_CREATED,
 				AuditAction.TIMESHEET_SUBMITTED,

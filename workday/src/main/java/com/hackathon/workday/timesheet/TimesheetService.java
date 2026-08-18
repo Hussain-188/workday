@@ -15,6 +15,7 @@ import com.hackathon.workday.timesheet.dto.TimesheetResponse;
 import com.hackathon.workday.timesheet.dto.UpdateTimesheetEntriesRequest;
 import com.hackathon.workday.worker.Worker;
 import com.hackathon.workday.worker.WorkerRepository;
+import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -48,8 +49,10 @@ public class TimesheetService {
 	}
 
 	/**
-	 * Opens a week. The assignment must belong to the caller and be ACTIVE, and
-	 * the caller must still be an active worker — an offboarded worker cannot
+	 * Opens a week. MVP 2: assignments are team-owned, so "belongs to the
+	 * caller" means the caller is an active member of the assignment's team —
+	 * any teammate may open their own week against the same assignment. The
+	 * caller must still be an active worker — an offboarded worker cannot
 	 * start new weeks, though their existing ones stay readable.
 	 */
 	@Transactional
@@ -63,9 +66,9 @@ public class TimesheetService {
 		Assignment assignment = assignmentRepository.findWithDetailsById(request.assignmentId())
 				.orElseThrow(() -> new ResourceNotFoundException("Assignment", request.assignmentId()));
 
-		// Ownership is proven against the resolved worker, not a request field.
-		if (!assignment.getWorker().getId().equals(self.getId())) {
-			throw new UnauthorizedAccessException("This assignment does not belong to you");
+		// Ownership is proven against the resolved worker's team, not a request field.
+		if (self.getTeam() == null || !assignment.getTeam().getId().equals(self.getTeam().getId())) {
+			throw new UnauthorizedAccessException("This assignment does not belong to your team");
 		}
 		if (!assignment.isActive()) {
 			throw new InvalidTimesheetStateException(
@@ -73,13 +76,13 @@ public class TimesheetService {
 		}
 
 		// Checked here for a clean error; the unique key is the real guarantee.
-		if (timesheetRepository.existsByAssignmentIdAndWeekStartDate(
-				assignment.getId(), request.weekStartDate())) {
+		if (timesheetRepository.existsByAssignmentIdAndWorkerIdAndWeekStartDate(
+				assignment.getId(), self.getId(), request.weekStartDate())) {
 			throw new DuplicateTimesheetException(
 					"A timesheet already exists for this assignment for the week of " + request.weekStartDate());
 		}
 
-		Timesheet timesheet = new Timesheet(assignment, request.weekStartDate());
+		Timesheet timesheet = new Timesheet(assignment, self, request.weekStartDate());
 		if (request.entries() != null && !request.entries().isEmpty()) {
 			timesheet.replaceEntries(timesheetMapper.toEntities(request.entries()));
 		}
@@ -107,14 +110,64 @@ public class TimesheetService {
 	/**
 	 * Marks the week complete: verify ownership, verify it is still DRAFT,
 	 * recompute the total from the entries, then flip the status.
+	 *
+	 * <p>MVP 3 Soft Cap Rule: if the assignment carries an {@code allocated_hours}
+	 * budget, and this submission pushes the team's total logged hours on it
+	 * past that budget, the week is flagged NEEDS_REVIEW instead of being left
+	 * SUBMITTED-and-billable.
 	 */
 	@Transactional
 	public TimesheetResponse submitTimesheet(Long timesheetId, AuthPrincipal actor) {
 		Timesheet timesheet = requireOwnTimesheet(timesheetId, actor);
 		timesheet.submit();
 
+		Assignment assignment = timesheet.getAssignment();
+		BigDecimal allocatedHours = assignment.getAllocatedHours();
+		if (allocatedHours != null) {
+			BigDecimal alreadyLogged = timesheetRepository.sumHoursByAssignmentIdAndStatusIn(
+					assignment.getId(), List.of(TimesheetStatus.SUBMITTED, TimesheetStatus.NEEDS_REVIEW));
+			BigDecimal projectedTotal = alreadyLogged.add(timesheet.getTotalHours());
+			if (projectedTotal.compareTo(allocatedHours) > 0) {
+				timesheet.flagForReview();
+				auditService.record(actor.getUserId(), AuditAction.TIMESHEET_FLAGGED_FOR_REVIEW, ENTITY,
+						timesheet.getId(), "assignmentId=" + assignment.getId() + ", allocatedHours=" + allocatedHours
+								+ ", projectedTotal=" + projectedTotal);
+			}
+		}
+
 		auditService.record(actor.getUserId(), AuditAction.TIMESHEET_SUBMITTED, ENTITY, timesheet.getId(),
 				"week=" + timesheet.getWeekStartDate() + ", totalHours=" + timesheet.getTotalHours());
+
+		return timesheetMapper.toResponse(timesheet);
+	}
+
+	/**
+	 * The Soft Cap Rule's resolution: a manager decides a NEEDS_REVIEW week,
+	 * either approving the overage in full or capping its billable hours at the
+	 * assignment's budget. Either way it returns to SUBMITTED, ready for the
+	 * next Milestone Billing invoice.
+	 */
+	@Transactional
+	public TimesheetResponse resolveReview(Long timesheetId, boolean approveOverage, AuthPrincipal actor) {
+		Timesheet timesheet = requireTimesheet(timesheetId);
+		Assignment assignment = timesheet.getAssignment();
+		if (!assignment.getTeam().getOrganization().getId().equals(actor.getOrganizationId())) {
+			throw new UnauthorizedAccessException("This timesheet belongs to another organization");
+		}
+		if (!assignment.getTeam().isManagedBy(actor.getUserId())) {
+			throw new UnauthorizedAccessException("This timesheet belongs to a team you do not manage");
+		}
+
+		// Defensive: a timesheet only reaches NEEDS_REVIEW because its assignment
+		// had a budget at submission time, but nothing here forbids clearing it
+		// later. Cap against zero rather than letting the entity NPE on it.
+		BigDecimal allocatedHours = assignment.getAllocatedHours() != null
+				? assignment.getAllocatedHours()
+				: BigDecimal.ZERO;
+		timesheet.resolveReview(approveOverage, allocatedHours);
+
+		auditService.record(actor.getUserId(), AuditAction.TIMESHEET_REVIEW_RESOLVED, ENTITY, timesheet.getId(),
+				"approveOverage=" + approveOverage + ", billableHours=" + timesheet.getBillableHours());
 
 		return timesheetMapper.toResponse(timesheet);
 	}
@@ -165,7 +218,7 @@ public class TimesheetService {
 	private Timesheet requireOwnTimesheet(Long timesheetId, AuthPrincipal actor) {
 		Timesheet timesheet = requireTimesheet(timesheetId);
 		Worker self = requireSelfWorker(actor);
-		if (!timesheet.getAssignment().getWorker().getId().equals(self.getId())) {
+		if (!timesheet.getWorker().getId().equals(self.getId())) {
 			throw new UnauthorizedAccessException("This timesheet does not belong to you");
 		}
 		return timesheet;
@@ -201,7 +254,7 @@ public class TimesheetService {
 					"Project managers cannot view timesheets");
 			case WORKER -> {
 				Worker self = requireSelfWorker(actor);
-				if (!assignment.getWorker().getId().equals(self.getId())) {
+				if (!timesheet.getWorker().getId().equals(self.getId())) {
 					throw new UnauthorizedAccessException("You may only view your own timesheets");
 				}
 			}

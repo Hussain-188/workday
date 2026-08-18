@@ -4,6 +4,7 @@ import com.hackathon.workday.assignment.Assignment;
 import com.hackathon.workday.common.BaseEntity;
 import com.hackathon.workday.common.exception.InvalidTimesheetEntryException;
 import com.hackathon.workday.common.exception.InvalidTimesheetStateException;
+import com.hackathon.workday.worker.Worker;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -48,6 +49,14 @@ public class Timesheet extends BaseEntity {
 	@JoinColumn(name = "assignment_id", nullable = false)
 	private Assignment assignment;
 
+	/**
+	 * Since an Assignment is now team-owned (MVP 2), the timesheet is the only
+	 * place that records which team member logged this particular week.
+	 */
+	@ManyToOne(fetch = FetchType.LAZY, optional = false)
+	@JoinColumn(name = "worker_id", nullable = false)
+	private Worker worker;
+
 	@Column(name = "week_start_date", nullable = false)
 	private LocalDate weekStartDate;
 
@@ -57,6 +66,16 @@ public class Timesheet extends BaseEntity {
 	/** Always derived from the entries; a client-supplied total is ignored. */
 	@Column(name = "total_hours", nullable = false, precision = 6, scale = 2)
 	private BigDecimal totalHours = BigDecimal.ZERO.setScale(HOURS_SCALE);
+
+	/**
+	 * MVP 3 Soft Cap Rule: how many of {@code totalHours} are actually billable.
+	 * {@code null} means "all of them" — the normal, never-flagged case. Only
+	 * ever set by {@link #resolveReview}, once, when a manager decides a
+	 * NEEDS_REVIEW week: {@code totalHours} if they approve the overage in
+	 * full, or the assignment's {@code allocated_hours} if they cap it.
+	 */
+	@Column(name = "billable_hours", precision = 6, scale = 2)
+	private BigDecimal billableHours;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 20)
@@ -77,12 +96,13 @@ public class Timesheet extends BaseEntity {
 		// for JPA
 	}
 
-	public Timesheet(Assignment assignment, LocalDate weekStartDate) {
+	public Timesheet(Assignment assignment, Worker worker, LocalDate weekStartDate) {
 		if (weekStartDate.getDayOfWeek() != WEEK_START_DAY) {
 			throw new InvalidTimesheetEntryException(
 					"weekStartDate must be a Monday; received " + weekStartDate.getDayOfWeek());
 		}
 		this.assignment = assignment;
+		this.worker = worker;
 		this.weekStartDate = weekStartDate;
 		this.weekEndDate = weekStartDate.plusDays(6);
 		this.status = TimesheetStatus.DRAFT;
@@ -136,6 +156,35 @@ public class Timesheet extends BaseEntity {
 		this.status = TimesheetStatus.SUBMITTED;
 	}
 
+	/**
+	 * The Soft Cap Rule: called right after {@link #submit()} once the caller has
+	 * confirmed the team's total logged hours on this assignment now exceed its
+	 * {@code allocated_hours} budget. Detours the week to NEEDS_REVIEW instead of
+	 * leaving it SUBMITTED-and-billable.
+	 */
+	public void flagForReview() {
+		if (status != TimesheetStatus.SUBMITTED) {
+			throw new InvalidTimesheetStateException(
+					"Only a SUBMITTED timesheet can be flagged for review; this one is " + status);
+		}
+		this.status = TimesheetStatus.NEEDS_REVIEW;
+	}
+
+	/**
+	 * The manager's decision on a flagged week. {@code approveOverage=true}
+	 * bills every logged hour; {@code false} discards the overage and caps
+	 * billable hours at {@code allocatedHours}. Either way the week returns to
+	 * SUBMITTED, ready for the next Milestone Billing invoice.
+	 */
+	public void resolveReview(boolean approveOverage, BigDecimal allocatedHours) {
+		if (status != TimesheetStatus.NEEDS_REVIEW) {
+			throw new InvalidTimesheetStateException(
+					"Timesheet is " + status + " and is not awaiting review");
+		}
+		this.billableHours = approveOverage ? totalHours : allocatedHours.min(totalHours);
+		this.status = TimesheetStatus.SUBMITTED;
+	}
+
 	public boolean isDraft() {
 		return status == TimesheetStatus.DRAFT;
 	}
@@ -186,6 +235,10 @@ public class Timesheet extends BaseEntity {
 		return assignment;
 	}
 
+	public Worker getWorker() {
+		return worker;
+	}
+
 	public LocalDate getWeekStartDate() {
 		return weekStartDate;
 	}
@@ -196,6 +249,11 @@ public class Timesheet extends BaseEntity {
 
 	public BigDecimal getTotalHours() {
 		return totalHours;
+	}
+
+	/** The hours Milestone Billing should charge for: {@code totalHours} unless a review capped it. */
+	public BigDecimal getBillableHours() {
+		return billableHours != null ? billableHours : totalHours;
 	}
 
 	public TimesheetStatus getStatus() {

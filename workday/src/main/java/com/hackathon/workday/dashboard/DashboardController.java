@@ -90,8 +90,10 @@ public class DashboardController {
 				Worker self = workerRepository.findByUserId(userId)
 						.orElseThrow(() -> new ResourceNotFoundException(
 								"No worker record exists for the authenticated user"));
-				tiles.put("active_assignments",
-						assignmentRepository.countByWorkerIdAndStatus(self.getId(), AssignmentStatus.ACTIVE));
+				// MVP 2: assignments are team-owned, so "my active assignments" means
+				// the active work items open on the worker's own team.
+				tiles.put("active_assignments", self.getTeam() == null ? 0
+						: assignmentRepository.countByTeamIdAndStatus(self.getTeam().getId(), AssignmentStatus.ACTIVE));
 				tiles.put("draft_timesheets",
 						timesheetRepository.countByWorkerIdAndStatus(self.getId(), TimesheetStatus.DRAFT));
 				tiles.put("submitted_timesheets",

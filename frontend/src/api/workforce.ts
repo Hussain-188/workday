@@ -13,10 +13,12 @@ import { useAuthStore } from '../store/authStore';
 export type Role = UiRole;
 export interface User { id:number; name:string; email:string; role:Role; is_active:boolean }
 export interface Team { id:number; name:string; description:string; manager_id:number; manager_name:string }
-export interface Worker { id:number; user_id:number|null; team_id:number; team_name:string; name:string; email:string; employee_code:string; worker_type:string; employment_start_date:string; status:'ACTIVE'|'INACTIVE'|'OFFBOARDED' }
-export interface Assignment { id:number; worker_id:number; worker_name:string; team_id:number; team_name:string; manager_id:number; manager_name:string; title:string; description:string; start_date:string; end_date:string; status:string }
+export interface Worker { id:number; user_id:number|null; team_id:number; team_name:string; name:string; email:string; employee_code:string; worker_type:string; employment_start_date:string; hourly_rate:number; status:'ACTIVE'|'INACTIVE'|'OFFBOARDED' }
+/** MVP 2: a Team Assignment — owned by a team and billed against a contract, not one named worker. MVP 3 adds an optional milestone budget. */
+export interface Assignment { id:number; team_id:number; team_name:string; contract_id:number; contract_project_name:string; manager_id:number; manager_name:string; title:string; description:string; start_date:string; end_date:string; status:string; allocated_hours:number|null }
 export interface Entry { work_date:string; hours:number }
-export interface Timesheet { id:number; worker_id:number; worker_name:string; assignment_id:number; assignment_title:string; week_start:string; week_end:string; status:'DRAFT'|'SUBMITTED'; total_hours:number; submitted_at:string|null; entries:Entry[] }
+/** MVP 3: NEEDS_REVIEW is the Soft Cap Rule detour — a submission over the assignment's budget lands here for a manager to resolve. billable_hours is what Milestone Billing will actually charge for. */
+export interface Timesheet { id:number; worker_id:number; worker_name:string; assignment_id:number; assignment_title:string; week_start:string; week_end:string; status:'DRAFT'|'SUBMITTED'|'NEEDS_REVIEW'; total_hours:number; billable_hours:number; submitted_at:string|null; entries:Entry[] }
 export interface Contract { id:number; project_name:string; start_date:string; end_date:string; duration_in_months:number; manager_id:number; manager_name:string; created_by_admin_id:number; created_by_admin_name:string }
 export type InvoiceStatus = 'DRAFT'|'PENDING_APPROVAL'|'APPROVED'|'REJECTED';
 export interface Invoice { id:number; contract_id:number; contract_project_name:string; manager_id:number; manager_name:string; project_manager_id:number; project_manager_name:string; period_start:string; period_end:string; amount:number; notes:string|null; decision_notes:string|null; status:InvoiceStatus }
@@ -69,15 +71,16 @@ const mapWorker = (w: any): Worker => ({
   employee_code: w.employeeCode,
   worker_type: w.workerType,
   employment_start_date: w.employmentStartDate,
+  hourly_rate: Number(w.hourlyRate ?? 0),
   status: w.status,
 });
 
 const mapAssignment = (a: any): Assignment => ({
   id: a.id,
-  worker_id: a.workerId,
-  worker_name: a.workerName,
   team_id: a.teamId,
   team_name: a.teamName,
+  contract_id: a.contractId,
+  contract_project_name: a.contractProjectName,
   manager_id: a.managerId,
   manager_name: a.managerName,
   title: a.title,
@@ -85,6 +88,7 @@ const mapAssignment = (a: any): Assignment => ({
   start_date: a.startDate,
   end_date: a.endDate ?? 'Open-ended',
   status: a.status,
+  allocated_hours: a.allocatedHours !== undefined && a.allocatedHours !== null ? Number(a.allocatedHours) : null,
 });
 
 const mapTimesheet = (t: any): Timesheet => ({
@@ -98,6 +102,7 @@ const mapTimesheet = (t: any): Timesheet => ({
   status: t.status,
   // Always the server's figure — the UI never decides the total.
   total_hours: Number(t.totalHours ?? 0),
+  billable_hours: Number(t.billableHours ?? t.totalHours ?? 0),
   submitted_at: t.status === 'SUBMITTED' ? t.updatedAt ?? null : null,
   entries: padWeek(
     t.weekStartDate,
@@ -168,6 +173,7 @@ export const workforceApi = {
         workerType: data.worker_type,
         employmentStartDate: data.employment_start_date,
         teamId: data.team_id ? Number(data.team_id) : null,
+        hourlyRate: data.hourly_rate !== undefined && data.hourly_rate !== '' ? Number(data.hourly_rate) : null,
       })
       .then((r) => r.data),
 
@@ -178,6 +184,7 @@ export const workforceApi = {
         workerType: data.worker_type,
         teamId: data.team_id ? Number(data.team_id) : undefined,
         status: data.status,
+        hourlyRate: data.hourly_rate !== undefined && data.hourly_rate !== '' ? Number(data.hourly_rate) : undefined,
       })
       .then((r) => r.data),
 
@@ -191,15 +198,33 @@ export const workforceApi = {
       })
       .then((r) => unwrap(r).map(mapAssignment)),
 
+  /** MVP 2: a Team Assignment names a team and a contract, never a worker. MVP 3 adds an optional milestone budget. */
   createAssignment: (data: any) =>
     api
       .post('/api/assignments', {
-        workerId: Number(data.worker_id),
-        // teamId is omitted: the backend defaults it to the worker's own team.
+        teamId: Number(data.team_id),
+        contractId: Number(data.contract_id),
         title: data.title,
         description: data.description || null,
         startDate: data.start_date,
         endDate: data.end_date || null,
+        allocatedHours: data.allocated_hours !== undefined && data.allocated_hours !== ''
+          ? Number(data.allocated_hours)
+          : null,
+      })
+      .then((r) => r.data),
+
+  /**
+   * MVP 3 Automated Handoff: marking an assignment COMPLETED with a project
+   * manager named bills every SUBMITTED timesheet on its contract straight to
+   * them in the same call — no billable hours yet is not an error, it just
+   * skips the invoice.
+   */
+  updateAssignmentStatus: (id: number, status: string, projectManagerId?: number) =>
+    api
+      .patch(`/api/assignments/${id}/status`, {
+        status,
+        projectManagerId: projectManagerId ?? null,
       })
       .then((r) => r.data),
 
@@ -227,6 +252,10 @@ export const workforceApi = {
   submitTimesheet: (id: number) =>
     api.post(`/api/timesheets/${id}/submit`).then((r) => mapTimesheet(r.data)),
 
+  /** MVP 3 Soft Cap Rule: the manager's decision on a NEEDS_REVIEW week. */
+  reviewTimesheet: (id: number, approveOverage: boolean) =>
+    api.post(`/api/timesheets/${id}/review`, { approveOverage }).then((r) => mapTimesheet(r.data)),
+
   contracts: () =>
     api.get('/api/contracts', { params: PAGE }).then((r) => unwrap(r).map(mapContract)),
 
@@ -245,6 +274,15 @@ export const workforceApi = {
     api
       .get('/api/invoices', { params: { ...PAGE, ...params } })
       .then((r) => unwrap(r).map(mapInvoice)),
+
+  /** Milestone Billing (T&M): the amount is computed server-side from SUBMITTED timesheets. */
+  generateInvoice: (data: any) =>
+    api
+      .post('/api/invoices/generate', {
+        contractId: Number(data.contract_id),
+        projectManagerId: Number(data.project_manager_id),
+      })
+      .then((r) => mapInvoice(r.data)),
 
   createInvoice: (data: any) =>
     api
@@ -266,4 +304,17 @@ export const workforceApi = {
 
   rejectInvoice: (id: number, notes: string) =>
     api.post(`/api/invoices/${id}/reject`, { notes }).then((r) => mapInvoice(r.data)),
+
+  /** MVP 3: fetches the formatted invoice PDF and hands the browser a file to save. */
+  downloadInvoicePdf: async (id: number) => {
+    const res = await api.get(`/api/invoices/${id}/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `invoice-${id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
 };

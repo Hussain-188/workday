@@ -105,6 +105,20 @@ public class ContractService {
 		return contract;
 	}
 
+	/**
+	 * Loads a contract and proves the given user owns it. Used by Milestone
+	 * Billing generation, which runs from raw ids rather than a request-scoped
+	 * {@link AuthPrincipal}.
+	 */
+	@Transactional(readOnly = true)
+	public Contract requireOwnedContract(Long contractId, Long managerId) {
+		Contract contract = requireContract(contractId);
+		if (!contract.isOwnedByManager(managerId)) {
+			throw new UnauthorizedAccessException("You do not own this contract");
+		}
+		return contract;
+	}
+
 	// ---------------------------------------------------------------- helpers
 
 	private Contract requireContract(Long contractId) {

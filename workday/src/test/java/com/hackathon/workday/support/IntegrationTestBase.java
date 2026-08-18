@@ -2,6 +2,9 @@ package com.hackathon.workday.support;
 
 import com.hackathon.workday.assignment.Assignment;
 import com.hackathon.workday.assignment.AssignmentRepository;
+import com.hackathon.workday.contract.Contract;
+import com.hackathon.workday.contract.ContractRepository;
+import com.hackathon.workday.invoice.InvoiceRepository;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.organization.OrganizationRepository;
 import com.hackathon.workday.team.Team;
@@ -16,6 +19,7 @@ import com.hackathon.workday.worker.WorkerType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,10 +64,16 @@ public abstract class IntegrationTestBase {
 	protected TeamRepository teamRepository;
 
 	@Autowired
+	protected ContractRepository contractRepository;
+
+	@Autowired
 	protected AssignmentRepository assignmentRepository;
 
 	@Autowired
 	protected TimesheetRepository timesheetRepository;
+
+	@Autowired
+	protected InvoiceRepository invoiceRepository;
 
 	@Autowired
 	protected PasswordEncoder passwordEncoder;
@@ -80,7 +90,7 @@ public abstract class IntegrationTestBase {
 	void resetDatabase() {
 		jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
 		for (String table : new String[] {
-				"timesheet_entries", "timesheets", "assignments",
+				"timesheet_entries", "timesheets", "invoices", "assignments", "contracts",
 				"audit_logs", "workers", "teams", "users", "organizations" }) {
 			jdbcTemplate.execute("TRUNCATE TABLE " + table);
 		}
@@ -104,15 +114,27 @@ public abstract class IntegrationTestBase {
 
 	protected Worker givenWorker(Organization organization, String name, String email,
 			String employeeCode, WorkerType type, Team team) {
+		return givenWorker(organization, name, email, employeeCode, type, team, BigDecimal.ZERO);
+	}
+
+	protected Worker givenWorker(Organization organization, String name, String email,
+			String employeeCode, WorkerType type, Team team, BigDecimal hourlyRate) {
 		User user = givenUser(organization, name, email, Role.WORKER);
-		Worker worker = new Worker(user, organization, employeeCode, type, LocalDate.of(2026, 1, 5));
+		Worker worker = new Worker(user, organization, employeeCode, type, LocalDate.of(2026, 1, 5), hourlyRate);
 		worker.setTeam(team);
 		return workerRepository.save(worker);
 	}
 
-	protected Assignment givenAssignment(Team team, Worker worker, User manager, String title) {
+	/** The project a Team Assignment bills against. */
+	protected Contract givenContract(User manager, User createdByAdmin, String projectName) {
+		return contractRepository.save(
+				new Contract(projectName, LocalDate.of(2026, 1, 5), 12, manager, createdByAdmin));
+	}
+
+	/** MVP 2: an assignment is owned by a team, not a single worker. */
+	protected Assignment givenAssignment(Team team, Contract contract, User manager, String title) {
 		return assignmentRepository.save(new Assignment(
-				team, worker, manager, title, null, LocalDate.of(2026, 1, 5), null));
+				team, contract, manager, title, null, LocalDate.of(2026, 1, 5), null));
 	}
 
 	// --------------------------------------------------------------- helpers

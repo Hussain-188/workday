@@ -22,6 +22,7 @@ public class WorkerMapper {
 				worker.getWorkerType(),
 				worker.getEmploymentStartDate(),
 				worker.getEmploymentEndDate(),
+				worker.getHourlyRate(),
 				worker.getStatus(),
 				team != null ? team.getId() : null,
 				team != null ? team.getName() : null,

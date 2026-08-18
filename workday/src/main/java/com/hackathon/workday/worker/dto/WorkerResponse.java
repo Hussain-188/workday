@@ -2,6 +2,7 @@ package com.hackathon.workday.worker.dto;
 
 import com.hackathon.workday.worker.WorkerStatus;
 import com.hackathon.workday.worker.WorkerType;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 
@@ -15,6 +16,7 @@ public record WorkerResponse(
 		WorkerType workerType,
 		LocalDate employmentStartDate,
 		LocalDate employmentEndDate,
+		BigDecimal hourlyRate,
 		WorkerStatus status,
 		Long teamId,
 		String teamName,

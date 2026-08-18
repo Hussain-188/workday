@@ -86,7 +86,8 @@ public class WorkerService {
 				organization,
 				request.employeeCode(),
 				request.workerType(),
-				request.employmentStartDate());
+				request.employmentStartDate(),
+				request.hourlyRate() != null ? request.hourlyRate() : java.math.BigDecimal.ZERO);
 
 		if (request.teamId() != null) {
 			worker.setTeam(resolveAssignableTeam(request.teamId(), actor));
@@ -165,6 +166,9 @@ public class WorkerService {
 		}
 		if (request.employmentEndDate() != null) {
 			worker.setEmploymentEndDate(request.employmentEndDate());
+		}
+		if (request.hourlyRate() != null) {
+			worker.setHourlyRate(request.hourlyRate());
 		}
 		if (request.teamId() != null) {
 			worker.setTeam(resolveAssignableTeam(request.teamId(), actor));

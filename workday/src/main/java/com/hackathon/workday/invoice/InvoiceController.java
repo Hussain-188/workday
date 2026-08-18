@@ -2,6 +2,7 @@ package com.hackathon.workday.invoice;
 
 import com.hackathon.workday.common.response.PageResponse;
 import com.hackathon.workday.invoice.dto.CreateInvoiceRequest;
+import com.hackathon.workday.invoice.dto.GenerateInvoiceRequest;
 import com.hackathon.workday.invoice.dto.InvoiceDecisionRequest;
 import com.hackathon.workday.invoice.dto.InvoiceResponse;
 import com.hackathon.workday.security.AuthPrincipal;
@@ -10,7 +11,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -43,6 +46,22 @@ public class InvoiceController {
 	}
 
 	/**
+	 * Milestone Billing (T&amp;M): computes the amount from every SUBMITTED
+	 * timesheet against the contract's assignments and raises the invoice
+	 * straight into PENDING_APPROVAL — no manual amount entry, no separate
+	 * submit step.
+	 */
+	@PostMapping("/generate")
+	@PreAuthorize("hasRole('MANAGER')")
+	public ResponseEntity<InvoiceResponse> generateInvoice(
+			@Valid @RequestBody GenerateInvoiceRequest request,
+			@AuthenticationPrincipal AuthPrincipal actor) {
+		InvoiceResponse created = invoiceService.generateInvoiceForContract(
+				request.contractId(), actor.getUserId(), request.projectManagerId());
+		return ResponseEntity.status(HttpStatus.CREATED).body(created);
+	}
+
+	/**
 	 * Invoices visible to the caller: the whole organization for an admin or HR
 	 * user, only invoices they raised for a manager, only invoices routed to
 	 * them for a project manager.
@@ -63,6 +82,19 @@ public class InvoiceController {
 			@PathVariable Long id,
 			@AuthenticationPrincipal AuthPrincipal actor) {
 		return invoiceService.getInvoice(id, actor);
+	}
+
+	/** MVP 3: a formatted PDF of the invoice — same visibility rule as {@link #getInvoice}. */
+	@GetMapping("/{id}/pdf")
+	@PreAuthorize("hasAnyRole('SYSTEM_ADMIN', 'HR_MANAGER', 'MANAGER', 'PROJECT_MANAGER')")
+	public ResponseEntity<byte[]> downloadInvoicePdf(
+			@PathVariable Long id,
+			@AuthenticationPrincipal AuthPrincipal actor) {
+		byte[] pdf = invoiceService.generateInvoicePdf(id, actor);
+		return ResponseEntity.ok()
+				.contentType(MediaType.APPLICATION_PDF)
+				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoice-" + id + ".pdf\"")
+				.body(pdf);
 	}
 
 	/** Routes a DRAFT invoice to its assigned project manager. */

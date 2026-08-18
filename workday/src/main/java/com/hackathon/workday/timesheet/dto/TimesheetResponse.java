@@ -8,6 +8,9 @@ import java.util.List;
 
 /**
  * @param totalHours always server-calculated from {@code entries}
+ * @param billableHours MVP 3: the hours Milestone Billing will charge for —
+ *        equal to {@code totalHours} unless a manager capped a NEEDS_REVIEW
+ *        week at the assignment's budget
  * @param version optimistic-lock token; send nothing back, it is informational
  */
 public record TimesheetResponse(
@@ -21,6 +24,7 @@ public record TimesheetResponse(
 		LocalDate weekStartDate,
 		LocalDate weekEndDate,
 		BigDecimal totalHours,
+		BigDecimal billableHours,
 		TimesheetStatus status,
 		List<TimesheetEntryResponse> entries,
 		Long version,

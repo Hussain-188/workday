@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.hackathon.workday.assignment.Assignment;
+import com.hackathon.workday.contract.Contract;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.support.IntegrationTestBase;
 import com.hackathon.workday.team.Team;
@@ -40,15 +41,17 @@ class TimesheetIntegrationTest extends IntegrationTestBase {
 	@BeforeEach
 	void setUp() {
 		acme = givenOrganization("Acme Corporation", "ACME");
-		givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
+		User admin = givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
 		david = givenUser(acme, "David Miller", "manager@example.com", Role.MANAGER);
 		sarah = givenUser(acme, "Sarah Chen", "manager2@example.com", Role.MANAGER);
 		backend = givenTeam(acme, "Backend Engineering", "BACKEND", david);
 		frontend = givenTeam(acme, "Frontend Engineering", "FRONTEND", sarah);
 		john = givenWorker(acme, "John Carter", "john@example.com", "EMP-1001", WorkerType.CONTRACTOR, backend);
 		rahul = givenWorker(acme, "Rahul Nair", "rahul@example.com", "EMP-1003", WorkerType.EMPLOYEE, frontend);
-		migration = givenAssignment(backend, john, david, "Website Migration");
-		designSystem = givenAssignment(frontend, rahul, sarah, "Design System Rollout");
+		Contract backendContract = givenContract(david, admin, "Website Migration");
+		Contract frontendContract = givenContract(sarah, admin, "Design System Program");
+		migration = givenAssignment(backend, backendContract, david, "Website Migration");
+		designSystem = givenAssignment(frontend, frontendContract, sarah, "Design System Rollout");
 	}
 
 	private List<Map<String, Object>> fullWeek() {
@@ -113,8 +116,8 @@ class TimesheetIntegrationTest extends IntegrationTestBase {
 	}
 
 	@Test
-	@DisplayName("17. a worker cannot open a timesheet against someone else's assignment")
-	void cannotCreateForAnotherWorkersAssignment() throws Exception {
+	@DisplayName("17. a worker cannot open a timesheet against an assignment on another team")
+	void cannotCreateForAnotherTeamsAssignment() throws Exception {
 		String johnToken = tokenFor("john@example.com");
 
 		mockMvc.perform(post("/api/timesheets")
@@ -143,6 +146,25 @@ class TimesheetIntegrationTest extends IntegrationTestBase {
 								"entries", List.of()))))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("DUPLICATE_TIMESHEET"));
+	}
+
+	@Test
+	@DisplayName("MVP 2: two team members can each log the same assignment for the same week")
+	void teammatesCanShareAnAssignmentAndWeek() throws Exception {
+		Worker davidKumar = givenWorker(acme, "David Kumar", "davidk@example.com",
+				"EMP-1002", WorkerType.EMPLOYEE, backend);
+
+		long johnTimesheetId = createTimesheet(tokenFor("john@example.com"), migration.getId(), fullWeek());
+		long davidKumarTimesheetId = createTimesheet(tokenFor("davidk@example.com"), migration.getId(), fullWeek());
+
+		// Distinct timesheets, each billable to its own worker.
+		org.assertj.core.api.Assertions.assertThat(johnTimesheetId).isNotEqualTo(davidKumarTimesheetId);
+
+		String managerToken = tokenFor("manager@example.com");
+		mockMvc.perform(get("/api/manager/timesheets")
+						.header(HttpHeaders.AUTHORIZATION, bearer(managerToken)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(2));
 	}
 
 	@Test

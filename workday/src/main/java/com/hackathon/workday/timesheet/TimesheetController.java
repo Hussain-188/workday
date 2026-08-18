@@ -3,6 +3,7 @@ package com.hackathon.workday.timesheet;
 import com.hackathon.workday.common.response.PageResponse;
 import com.hackathon.workday.security.AuthPrincipal;
 import com.hackathon.workday.timesheet.dto.CreateTimesheetRequest;
+import com.hackathon.workday.timesheet.dto.ReviewTimesheetRequest;
 import com.hackathon.workday.timesheet.dto.TimesheetResponse;
 import com.hackathon.workday.timesheet.dto.UpdateTimesheetEntriesRequest;
 import jakarta.validation.Valid;
@@ -91,5 +92,18 @@ public class TimesheetController {
 			@PathVariable Long id,
 			@AuthenticationPrincipal AuthPrincipal actor) {
 		return timesheetService.submitTimesheet(id, actor);
+	}
+
+	/**
+	 * MVP 3 Soft Cap Rule: the manager's decision on a NEEDS_REVIEW week —
+	 * approve the overage in full, or cap billable hours at the assignment's budget.
+	 */
+	@PostMapping("/{id}/review")
+	@PreAuthorize("hasRole('MANAGER')")
+	public TimesheetResponse reviewTimesheet(
+			@PathVariable Long id,
+			@Valid @RequestBody ReviewTimesheetRequest request,
+			@AuthenticationPrincipal AuthPrincipal actor) {
+		return timesheetService.resolveReview(id, request.approveOverage(), actor);
 	}
 }

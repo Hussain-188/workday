@@ -21,7 +21,7 @@ class TimesheetAggregateTest {
 	private static final LocalDate MONDAY = LocalDate.of(2026, 8, 17);
 
 	private Timesheet newTimesheet() {
-		return new Timesheet(null, MONDAY);
+		return new Timesheet(null, null, MONDAY);
 	}
 
 	private TimesheetEntry entry(LocalDate date, String hours) {
@@ -41,7 +41,7 @@ class TimesheetAggregateTest {
 	@Test
 	@DisplayName("a week that does not start on Monday is rejected")
 	void rejectsNonMondayWeekStart() {
-		assertThatThrownBy(() -> new Timesheet(null, LocalDate.of(2026, 8, 18)))
+		assertThatThrownBy(() -> new Timesheet(null, null, LocalDate.of(2026, 8, 18)))
 				.isInstanceOf(InvalidTimesheetEntryException.class)
 				.hasMessageContaining("must be a Monday");
 	}

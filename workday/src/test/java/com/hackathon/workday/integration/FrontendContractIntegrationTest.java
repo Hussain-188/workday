@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.hackathon.workday.contract.Contract;
 import com.hackathon.workday.organization.Organization;
 import com.hackathon.workday.support.IntegrationTestBase;
 import com.hackathon.workday.team.Team;
@@ -27,6 +28,7 @@ import org.springframework.http.MediaType;
 class FrontendContractIntegrationTest extends IntegrationTestBase {
 
 	private Organization acme;
+	private User admin;
 	private User david;
 	private Team backend;
 	private Worker john;
@@ -34,7 +36,7 @@ class FrontendContractIntegrationTest extends IntegrationTestBase {
 	@BeforeEach
 	void setUp() {
 		acme = givenOrganization("Acme Corporation", "ACME");
-		givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
+		admin = givenUser(acme, "System Admin", "admin@example.com", Role.SYSTEM_ADMIN);
 		givenUser(acme, "Anita Sharma", "hr@example.com", Role.HR_MANAGER);
 		david = givenUser(acme, "David Miller", "manager@example.com", Role.MANAGER);
 		givenUser(acme, "Sarah Chen", "manager2@example.com", Role.MANAGER);
@@ -170,31 +172,42 @@ class FrontendContractIntegrationTest extends IntegrationTestBase {
 				.andExpect(jsonPath("$.code").value("MOBILE-ENGINEERING-2"));
 	}
 
+	/**
+	 * MVP 2: an assignment is owned by a whole team and billed against a
+	 * contract; {@code description} and {@code endDate} are the fields a
+	 * minimal client form may legitimately leave out.
+	 */
 	@Test
-	@DisplayName("an assignment can omit teamId; the worker's own team is used")
-	void assignmentTeamIsDerivedFromWorker() throws Exception {
+	@DisplayName("an assignment can omit description and endDate")
+	void assignmentOptionalFieldsCanBeOmitted() throws Exception {
+		Contract contract = givenContract(david, admin, "Website Migration");
+
 		mockMvc.perform(post("/api/assignments")
 						.header(HttpHeaders.AUTHORIZATION, bearer(tokenFor("manager@example.com")))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
-								"workerId", john.getId(),
+								"teamId", backend.getId(),
+								"contractId", contract.getId(),
 								"title", "Website Migration",
 								"startDate", "2026-08-03"))))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.teamId").value(backend.getId()))
-				.andExpect(jsonPath("$.managerId").value(david.getId()));
+				.andExpect(jsonPath("$.managerId").value(david.getId()))
+				.andExpect(jsonPath("$.endDate").doesNotExist());
 	}
 
 	@Test
-	@DisplayName("a derived team is still ownership-checked, not a way around it")
-	void derivedTeamStillEnforcesOwnership() throws Exception {
-		// Sarah manages no team that John belongs to, so deriving his team must
-		// not hand her permission to assign work on it.
+	@DisplayName("a manager cannot create a team assignment on a team they do not manage")
+	void assignmentCreationEnforcesTeamOwnership() throws Exception {
+		Contract contract = givenContract(david, admin, "Website Migration");
+
+		// Sarah manages Frontend, not Backend.
 		mockMvc.perform(post("/api/assignments")
 						.header(HttpHeaders.AUTHORIZATION, bearer(tokenFor("manager2@example.com")))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(json(Map.of(
-								"workerId", john.getId(),
+								"teamId", backend.getId(),
+								"contractId", contract.getId(),
 								"title", "Sneaky work",
 								"startDate", "2026-08-03"))))
 				.andExpect(status().isForbidden())

@@ -2,7 +2,9 @@ package com.hackathon.workday.worker.dto;
 
 import com.hackathon.workday.worker.WorkerStatus;
 import com.hackathon.workday.worker.WorkerType;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
@@ -22,5 +24,8 @@ public record UpdateWorkerRequest(
 
 		Long teamId,
 
-		WorkerStatus status) {
+		WorkerStatus status,
+
+		@DecimalMin(value = "0.0", message = "hourlyRate must not be negative")
+		BigDecimal hourlyRate) {
 }

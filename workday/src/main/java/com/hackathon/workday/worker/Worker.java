@@ -14,6 +14,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
@@ -52,6 +53,10 @@ public class Worker extends BaseEntity {
 	@Column(name = "employment_end_date")
 	private LocalDate employmentEndDate;
 
+	/** Billed per hour logged against a Milestone Billing (T&amp;M) assignment. */
+	@Column(name = "hourly_rate", nullable = false, precision = 8, scale = 2)
+	private BigDecimal hourlyRate = BigDecimal.ZERO.setScale(2);
+
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 20)
 	private WorkerStatus status = WorkerStatus.ACTIVE;
@@ -62,12 +67,18 @@ public class Worker extends BaseEntity {
 
 	public Worker(User user, Organization organization, String employeeCode,
 			WorkerType workerType, LocalDate employmentStartDate) {
+		this(user, organization, employeeCode, workerType, employmentStartDate, BigDecimal.ZERO);
+	}
+
+	public Worker(User user, Organization organization, String employeeCode,
+			WorkerType workerType, LocalDate employmentStartDate, BigDecimal hourlyRate) {
 		this.user = user;
 		this.organization = organization;
 		this.employeeCode = employeeCode;
 		this.workerType = workerType;
 		this.employmentStartDate = employmentStartDate;
 		this.status = WorkerStatus.ACTIVE;
+		setHourlyRate(hourlyRate);
 	}
 
 	/**
@@ -137,6 +148,17 @@ public class Worker extends BaseEntity {
 
 	public void setEmploymentEndDate(LocalDate employmentEndDate) {
 		this.employmentEndDate = employmentEndDate;
+	}
+
+	public BigDecimal getHourlyRate() {
+		return hourlyRate;
+	}
+
+	public void setHourlyRate(BigDecimal hourlyRate) {
+		if (hourlyRate == null || hourlyRate.signum() < 0) {
+			throw new InvalidWorkerStateException("hourlyRate must not be negative");
+		}
+		this.hourlyRate = hourlyRate.setScale(2, java.math.RoundingMode.HALF_UP);
 	}
 
 	public WorkerStatus getStatus() {

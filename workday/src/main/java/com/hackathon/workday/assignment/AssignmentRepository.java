@@ -1,5 +1,6 @@
 package com.hackathon.workday.assignment;
 
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -10,32 +11,37 @@ import org.springframework.data.repository.query.Param;
 
 public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
 	Optional<Assignment> findWithDetailsById(Long id);
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
-	Page<Assignment> findByWorkerId(Long workerId, Pageable pageable);
+	/** Everything on a worker's team — the MVP 2 team-ownership model. */
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
+	Page<Assignment> findByTeamId(Long teamId, Pageable pageable);
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
-	Page<Assignment> findByWorkerIdAndStatus(Long workerId, AssignmentStatus status, Pageable pageable);
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
+	Page<Assignment> findByTeamIdAndStatus(Long teamId, AssignmentStatus status, Pageable pageable);
+
+	/** Every assignment billed against a contract; the input to invoice generation. */
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
+	List<Assignment> findByContractId(Long contractId);
 
 	/** Everything across every team this manager owns. */
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
 	@Query("SELECT a FROM Assignment a WHERE a.team.manager.id = :managerId")
 	Page<Assignment> findByTeamManagerId(@Param("managerId") Long managerId, Pageable pageable);
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
 	@Query("SELECT a FROM Assignment a WHERE a.team.manager.id = :managerId AND a.status = :status")
 	Page<Assignment> findByTeamManagerIdAndStatus(
 			@Param("managerId") Long managerId,
 			@Param("status") AssignmentStatus status,
 			Pageable pageable);
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
 	@Query("SELECT a FROM Assignment a WHERE a.team.organization.id = :organizationId")
 	Page<Assignment> findByOrganizationId(@Param("organizationId") Long organizationId, Pageable pageable);
 
-	@EntityGraph(attributePaths = {"team", "worker", "worker.user", "manager"})
+	@EntityGraph(attributePaths = {"team", "contract", "manager"})
 	@Query("""
 			SELECT a FROM Assignment a
 			WHERE a.team.organization.id = :organizationId AND a.status = :status
@@ -58,5 +64,5 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
 			@Param("managerId") Long managerId,
 			@Param("status") AssignmentStatus status);
 
-	long countByWorkerIdAndStatus(Long workerId, AssignmentStatus status);
+	long countByTeamIdAndStatus(Long teamId, AssignmentStatus status);
 }

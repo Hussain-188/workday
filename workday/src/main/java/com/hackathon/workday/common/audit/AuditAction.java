@@ -10,6 +10,10 @@ public enum AuditAction {
 	ASSIGNMENT_STATUS_CHANGED,
 	TIMESHEET_CREATED,
 	TIMESHEET_SUBMITTED,
+	/** MVP 3 Soft Cap Rule: a submission pushed the team's logged hours past the assignment's budget. */
+	TIMESHEET_FLAGGED_FOR_REVIEW,
+	/** MVP 3 Soft Cap Rule: a manager approved or capped a NEEDS_REVIEW week. */
+	TIMESHEET_REVIEW_RESOLVED,
 	CONTRACT_CREATED,
 	INVOICE_CREATED,
 	INVOICE_SUBMITTED,
