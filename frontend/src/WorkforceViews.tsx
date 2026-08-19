@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   ArrowUpRight,
   BriefcaseBusiness,
@@ -21,11 +21,17 @@ import { imagery } from './assets';
 import {
   Avatar,
   Card,
+  ClearFilters,
   EmptyState,
   ErrorNote,
+  FilterBar,
+  FilterOption,
+  FilterSelect,
   Hint,
+  matchesQuery,
   Modal,
   Photo,
+  SearchField,
   SectionHead,
   Skeleton,
   Tag,
@@ -38,6 +44,19 @@ const err = (e: any) => apiError(e);
 const money = (n: number) => `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const day = (iso: string) =>
   iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+/** ENUM_VALUE → "Enum value" for filter-dropdown labels. */
+const prettyLabel = (s: string) => {
+  const lower = s.replace(/_/g, ' ').toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+};
+const statusOptions = (values: string[]): FilterOption[] =>
+  values.map((v) => ({ value: v, label: prettyLabel(v) }));
+/** Distinct values of one field across a list, alphabetised, for a filter dropdown. */
+const distinctOptions = <T,>(items: T[], pick: (item: T) => string | null | undefined): FilterOption[] =>
+  [...new Set(items.map(pick).filter((v): v is string => !!v))]
+    .sort((a, b) => a.localeCompare(b))
+    .map((v) => ({ value: v, label: v }));
 
 /** The right-hand column: a form that stays with you as the list scrolls. */
 const Aside = ({ children }: { children: ReactNode }) => (
@@ -178,6 +197,12 @@ export function TeamsView({ user }: { user: User }) {
   const [managers, setManagers] = useState<User[]>([]);
   const [error, setError] = useState('');
   const [form, setForm] = useState({ name: '', description: '', manager_id: '' });
+  const [q, setQ] = useState('');
+
+  const filtered = useMemo(
+    () => teams.filter((t) => matchesQuery(q, t.name, t.description, t.manager_name)),
+    [teams, q],
+  );
 
   const load = () => workforceApi.teams().then(setTeams).catch((e) => setError(err(e)));
   // Only an admin may create a team, so only an admin needs the manager picker.
@@ -206,12 +231,22 @@ export function TeamsView({ user }: { user: User }) {
           eyebrow="Directory"
           title={user.role === 'manager' ? 'My teams' : 'All teams'}
           note="Each team carries a single accountable manager; assignments and hours roll up through them."
-          action={<span className="chip tabular">{teams.length} total</span>}
+          action={
+            <span className="chip tabular">
+              {filtered.length} of {teams.length}
+            </span>
+          }
         />
         <ErrorNote text={error} />
-        {teams.length ? (
+        {teams.length > 0 && (
+          <FilterBar>
+            <SearchField value={q} onChange={setQ} placeholder="Search teams or managers…" />
+            {q && <ClearFilters onClick={() => setQ('')} />}
+          </FilterBar>
+        )}
+        {filtered.length ? (
           <div className="stagger grid gap-3 md:grid-cols-2">
-            {teams.map((t) => (
+            {filtered.map((t) => (
               <article key={t.id} className="panel panel-hover flex flex-col justify-between">
                 <div>
                   <h3 className="text-[15px] font-semibold text-ink-900">{t.name}</h3>
@@ -229,6 +264,8 @@ export function TeamsView({ user }: { user: User }) {
               </article>
             ))}
           </div>
+        ) : teams.length ? (
+          <EmptyState title="No teams match those filters" note="Try a different search." />
         ) : (
           <EmptyState title="No teams yet" note="An administrator creates teams and appoints a manager to each." />
         )}
@@ -286,11 +323,18 @@ export function TeamsView({ user }: { user: User }) {
 
 // ── People ──────────────────────────────────────────────────────────────────
 
+const WORKER_STATUS_OPTIONS = statusOptions(['ACTIVE', 'INACTIVE', 'OFFBOARDED']);
+const WORKER_TYPE_OPTIONS = statusOptions(['EMPLOYEE', 'CONTRACTOR', 'TEMPORARY_WORKER']);
+
 export function WorkersView({ user }: { user: User }) {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [error, setError] = useState('');
   const [ask, confirmUi] = useConfirm();
+  const [q, setQ] = useState('');
+  const [teamFilter, setTeamFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const initial = {
     name: '',
     email: '',
@@ -336,6 +380,25 @@ export function WorkersView({ user }: { user: User }) {
   }
 
   const activeCount = workers.filter((w) => w.status === 'ACTIVE').length;
+  const teamOptions = useMemo(() => distinctOptions(teams, (t) => t.name), [teams]);
+  const filtered = useMemo(
+    () =>
+      workers.filter(
+        (w) =>
+          matchesQuery(q, w.name, w.email, w.employee_code) &&
+          (!teamFilter || w.team_name === teamFilter) &&
+          (!statusFilter || w.status === statusFilter) &&
+          (!typeFilter || w.worker_type === typeFilter),
+      ),
+    [workers, q, teamFilter, statusFilter, typeFilter],
+  );
+  const filtersActive = q || teamFilter || statusFilter || typeFilter;
+  const clearAll = () => {
+    setQ('');
+    setTeamFilter('');
+    setStatusFilter('');
+    setTypeFilter('');
+  };
 
   return (
     <div className={`grid gap-6 ${user.role === 'hr' ? 'xl:grid-cols-[1fr_400px]' : ''}`}>
@@ -347,12 +410,31 @@ export function WorkersView({ user }: { user: User }) {
           note="Everyone on the books, the team they sit with, and the rate their submitted hours bill at."
           action={
             <span className="chip tabular">
-              {activeCount} active · {workers.length} total
+              {filtersActive ? `${filtered.length} of ${workers.length}` : `${activeCount} active · ${workers.length} total`}
             </span>
           }
         />
+        {workers.length > 0 && (
+          <FilterBar>
+            <SearchField value={q} onChange={setQ} placeholder="Search name, email or code…" />
+            <FilterSelect value={teamFilter} onChange={setTeamFilter} options={teamOptions} placeholder="All teams" />
+            <FilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={WORKER_STATUS_OPTIONS}
+              placeholder="All statuses"
+            />
+            <FilterSelect
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={WORKER_TYPE_OPTIONS}
+              placeholder="All engagements"
+            />
+            {filtersActive && <ClearFilters onClick={clearAll} />}
+          </FilterBar>
+        )}
         <ErrorNote text={error} />
-        {workers.length ? (
+        {filtered.length ? (
           <div className="-mx-2 overflow-x-auto px-2">
             <table>
               <thead>
@@ -367,7 +449,7 @@ export function WorkersView({ user }: { user: User }) {
                 </tr>
               </thead>
               <tbody>
-                {workers.map((w) => (
+                {filtered.map((w) => (
                   <tr key={w.id}>
                     <td>
                       <div className="flex items-center gap-3">
@@ -413,6 +495,8 @@ export function WorkersView({ user }: { user: User }) {
               </tbody>
             </table>
           </div>
+        ) : workers.length ? (
+          <EmptyState title="No one matches those filters" note="Try clearing a filter or broadening your search." />
         ) : (
           <EmptyState title="No people on record" note="People operations onboards workers onto an existing team." />
         )}
@@ -526,6 +610,8 @@ export function WorkersView({ user }: { user: User }) {
 // ── Assignments ─────────────────────────────────────────────────────────────
 
 /** MVP 2: a Team Assignment — owned by a team, billed against a contract. Any active worker on that team may later log hours against it. MVP 3 adds an optional milestone budget (Soft Cap Rule) and a completion action that auto-invoices. */
+const ASSIGNMENT_STATUS_OPTIONS = statusOptions(['ACTIVE', 'COMPLETED', 'CANCELLED']);
+
 export function AssignmentsView({ user }: { user: User }) {
   const [items, setItems] = useState<Assignment[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -534,6 +620,10 @@ export function AssignmentsView({ user }: { user: User }) {
   const [error, setError] = useState('');
   const [closing, setClosing] = useState<Assignment | null>(null);
   const [closePm, setClosePm] = useState('');
+  const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [teamFilter, setTeamFilter] = useState('');
+  const [contractFilter, setContractFilter] = useState('');
   const initial = { team_id: '', contract_id: '', title: '', description: '', start_date: '', end_date: '', allocated_hours: '' };
   const [form, setForm] = useState(initial);
 
@@ -577,6 +667,27 @@ export function AssignmentsView({ user }: { user: User }) {
   const heading =
     user.role === 'worker' ? 'My team’s assignments' : user.role === 'manager' ? 'Team assignments' : 'All assignments';
 
+  const teamOptions = useMemo(() => distinctOptions(items, (a) => a.team_name), [items]);
+  const contractOptions = useMemo(() => distinctOptions(items, (a) => a.contract_project_name), [items]);
+  const filtered = useMemo(
+    () =>
+      items.filter(
+        (a) =>
+          matchesQuery(q, a.title, a.description, a.contract_project_name, a.team_name, a.manager_name) &&
+          (!statusFilter || a.status === statusFilter) &&
+          (!teamFilter || a.team_name === teamFilter) &&
+          (!contractFilter || a.contract_project_name === contractFilter),
+      ),
+    [items, q, statusFilter, teamFilter, contractFilter],
+  );
+  const filtersActive = q || statusFilter || teamFilter || contractFilter;
+  const clearAll = () => {
+    setQ('');
+    setStatusFilter('');
+    setTeamFilter('');
+    setContractFilter('');
+  };
+
   return (
     <div className={`grid gap-6 ${user.role === 'manager' ? 'xl:grid-cols-[1fr_400px]' : ''}`}>
       <Card>
@@ -584,12 +695,39 @@ export function AssignmentsView({ user }: { user: User }) {
           eyebrow="Delivery"
           title={heading}
           note="Work is owned by a team and billed to a contract. A milestone budget, where set, is what the soft-cap rule measures against."
-          action={<span className="chip tabular">{items.length} total</span>}
+          action={
+            <span className="chip tabular">
+              {filtersActive ? `${filtered.length} of ${items.length}` : `${items.length} total`}
+            </span>
+          }
         />
+        {items.length > 0 && (
+          <FilterBar>
+            <SearchField value={q} onChange={setQ} placeholder="Search assignments…" />
+            <FilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={ASSIGNMENT_STATUS_OPTIONS}
+              placeholder="All statuses"
+            />
+            {teamOptions.length > 1 && (
+              <FilterSelect value={teamFilter} onChange={setTeamFilter} options={teamOptions} placeholder="All teams" />
+            )}
+            {contractOptions.length > 1 && (
+              <FilterSelect
+                value={contractFilter}
+                onChange={setContractFilter}
+                options={contractOptions}
+                placeholder="All contracts"
+              />
+            )}
+            {filtersActive && <ClearFilters onClick={clearAll} />}
+          </FilterBar>
+        )}
         <ErrorNote text={error} />
-        {items.length ? (
+        {filtered.length ? (
           <div className="stagger grid gap-4 md:grid-cols-2">
-            {items.map((a) => (
+            {filtered.map((a) => (
               <article key={a.id} className="panel panel-hover flex flex-col">
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="text-[15px] font-semibold leading-snug text-ink-900">{a.title}</h3>
@@ -626,6 +764,8 @@ export function AssignmentsView({ user }: { user: User }) {
               </article>
             ))}
           </div>
+        ) : items.length ? (
+          <EmptyState title="No assignments match those filters" note="Try clearing a filter or broadening your search." />
         ) : (
           <EmptyState title="No assignments yet" note="A delivery manager opens assignments against a contract." />
         )}
@@ -785,6 +925,8 @@ const weekEntries = (start: string): Entry[] => {
 const weekday = (isoDate: string) =>
   new Date(isoDate + 'T00:00:00').toLocaleDateString('en', { weekday: 'short' });
 
+const TIMESHEET_STATUS_OPTIONS = statusOptions(['DRAFT', 'SUBMITTED', 'NEEDS_REVIEW']);
+
 export function TimesheetsView({ user }: { user: User }) {
   const [sheets, setSheets] = useState<Timesheet[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -793,6 +935,9 @@ export function TimesheetsView({ user }: { user: User }) {
   const [assignmentId, setAssignmentId] = useState('');
   const [weekStart, setWeekStart] = useState(monday());
   const [entries, setEntries] = useState<Entry[]>(weekEntries(monday()));
+  const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [assignmentFilter, setAssignmentFilter] = useState('');
 
   const load = () => workforceApi.timesheets().then(setSheets).catch((e) => setError(err(e)));
   useEffect(() => {
@@ -859,6 +1004,24 @@ export function TimesheetsView({ user }: { user: User }) {
       ? 'A week marked “needs review” pushed the team past its assignment’s milestone budget. Approve the overage, or cap the billable hours at the budget.'
       : 'Hours are logged by week and become read-only once submitted. There is no approval queue beyond the soft-cap rule.';
 
+  const assignmentOptions = useMemo(() => distinctOptions(sheets, (s) => s.assignment_title), [sheets]);
+  const filtered = useMemo(
+    () =>
+      sheets.filter(
+        (s) =>
+          matchesQuery(q, s.worker_name, s.assignment_title) &&
+          (!statusFilter || s.status === statusFilter) &&
+          (!assignmentFilter || s.assignment_title === assignmentFilter),
+      ),
+    [sheets, q, statusFilter, assignmentFilter],
+  );
+  const filtersActive = q || statusFilter || assignmentFilter;
+  const clearAll = () => {
+    setQ('');
+    setStatusFilter('');
+    setAssignmentFilter('');
+  };
+
   return (
     <div className={`grid gap-6 ${user.role === 'worker' ? 'xl:grid-cols-[1fr_400px]' : ''}`}>
       {confirmUi}
@@ -867,12 +1030,36 @@ export function TimesheetsView({ user }: { user: User }) {
           eyebrow="Time"
           title={heading}
           note={note}
-          action={<span className="chip tabular">{sheets.length} weeks</span>}
+          action={
+            <span className="chip tabular">
+              {filtersActive ? `${filtered.length} of ${sheets.length}` : `${sheets.length} weeks`}
+            </span>
+          }
         />
+        {sheets.length > 0 && (
+          <FilterBar>
+            {user.role !== 'worker' && <SearchField value={q} onChange={setQ} placeholder="Search by worker…" />}
+            <FilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={TIMESHEET_STATUS_OPTIONS}
+              placeholder="All statuses"
+            />
+            {assignmentOptions.length > 1 && (
+              <FilterSelect
+                value={assignmentFilter}
+                onChange={setAssignmentFilter}
+                options={assignmentOptions}
+                placeholder="All assignments"
+              />
+            )}
+            {filtersActive && <ClearFilters onClick={clearAll} />}
+          </FilterBar>
+        )}
         <ErrorNote text={error} />
-        {sheets.length ? (
+        {filtered.length ? (
           <div className="stagger space-y-4">
-            {sheets.map((s) => {
+            {filtered.map((s) => {
               const flagged = s.status === 'NEEDS_REVIEW';
               const peak = Math.max(1, ...s.entries.map((x) => Number(x.hours)));
               return (
@@ -977,6 +1164,8 @@ export function TimesheetsView({ user }: { user: User }) {
               );
             })}
           </div>
+        ) : sheets.length ? (
+          <EmptyState title="No weeks match those filters" note="Try clearing a filter or broadening your search." />
         ) : (
           <EmptyState title="No timesheets yet" note="Weeks appear here as team members log their hours." />
         )}
@@ -1064,6 +1253,8 @@ export function ContractsView({ user }: { user: User }) {
   const [error, setError] = useState('');
   const initial = { project_name: '', start_date: '', duration_in_months: '12', manager_id: '' };
   const [form, setForm] = useState(initial);
+  const [q, setQ] = useState('');
+  const [managerFilter, setManagerFilter] = useState('');
 
   const load = () => workforceApi.contracts().then(setItems).catch((e) => setError(err(e)));
   // Only an admin may create a contract, so only an admin needs the manager picker.
@@ -1085,6 +1276,16 @@ export function ContractsView({ user }: { user: User }) {
     }
   }
 
+  const managerOptions = useMemo(() => distinctOptions(items, (c) => c.manager_name), [items]);
+  const filtered = useMemo(
+    () =>
+      items.filter(
+        (c) => matchesQuery(q, c.project_name, c.manager_name) && (!managerFilter || c.manager_name === managerFilter),
+      ),
+    [items, q, managerFilter],
+  );
+  const filtersActive = q || managerFilter;
+
   return (
     <div className={`grid gap-6 ${user.role === 'admin' ? 'xl:grid-cols-[1fr_380px]' : ''}`}>
       <Card>
@@ -1092,12 +1293,30 @@ export function ContractsView({ user }: { user: User }) {
           eyebrow="Commercial"
           title={user.role === 'manager' ? 'My contracts' : 'All contracts'}
           note="The agreements assignments bill against. Every invoice traces back to one of these."
-          action={<span className="chip tabular">{items.length} total</span>}
+          action={
+            <span className="chip tabular">
+              {filtersActive ? `${filtered.length} of ${items.length}` : `${items.length} total`}
+            </span>
+          }
         />
+        {items.length > 0 && (
+          <FilterBar>
+            <SearchField value={q} onChange={setQ} placeholder="Search contracts…" />
+            {managerOptions.length > 1 && (
+              <FilterSelect
+                value={managerFilter}
+                onChange={setManagerFilter}
+                options={managerOptions}
+                placeholder="All managers"
+              />
+            )}
+            {filtersActive && <ClearFilters onClick={() => { setQ(''); setManagerFilter(''); }} />}
+          </FilterBar>
+        )}
         <ErrorNote text={error} />
-        {items.length ? (
+        {filtered.length ? (
           <div className="stagger grid gap-4 md:grid-cols-2">
-            {items.map((c) => (
+            {filtered.map((c) => (
               <article key={c.id} className="panel panel-hover group relative overflow-hidden">
                 <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-pine-50 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
                 <div className="relative">
@@ -1121,6 +1340,8 @@ export function ContractsView({ user }: { user: User }) {
               </article>
             ))}
           </div>
+        ) : items.length ? (
+          <EmptyState title="No contracts match those filters" note="Try clearing a filter or broadening your search." />
         ) : (
           <EmptyState title="No contracts yet" note="An administrator records the commercial agreement before work is assigned." />
         )}
@@ -1198,6 +1419,8 @@ export function ContractsView({ user }: { user: User }) {
 
 // ── Invoices ────────────────────────────────────────────────────────────────
 
+const INVOICE_STATUS_OPTIONS = statusOptions(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED']);
+
 export function InvoicesView({ user }: { user: User }) {
   const [items, setItems] = useState<Invoice[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -1206,6 +1429,8 @@ export function InvoicesView({ user }: { user: User }) {
   const [ask, confirmUi] = useConfirm();
   const [rejecting, setRejecting] = useState<Invoice | null>(null);
   const [reason, setReason] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [contractFilter, setContractFilter] = useState('');
   const genInitial = { contract_id: '', project_manager_id: '' };
   const [genForm, setGenForm] = useState(genInitial);
   const initial = { contract_id: '', project_manager_id: '', period_start: '', period_end: '', amount: '', notes: '' };
@@ -1291,6 +1516,18 @@ export function InvoicesView({ user }: { user: User }) {
     .filter((i) => i.status === 'PENDING_APPROVAL')
     .reduce((sum, i) => sum + Number(i.amount), 0);
 
+  const contractOptions = useMemo(() => distinctOptions(items, (i) => i.contract_project_name), [items]);
+  const filtered = useMemo(
+    () =>
+      items.filter(
+        (i) =>
+          (!statusFilter || i.status === statusFilter) &&
+          (!contractFilter || i.contract_project_name === contractFilter),
+      ),
+    [items, statusFilter, contractFilter],
+  );
+  const filtersActive = statusFilter || contractFilter;
+
   return (
     <div className={`grid gap-6 ${user.role === 'manager' ? 'xl:grid-cols-[1fr_400px]' : ''}`}>
       {confirmUi}
@@ -1300,17 +1537,47 @@ export function InvoicesView({ user }: { user: User }) {
           title={heading}
           note="Each invoice carries the contract, the period it covers and the decision made on it."
           action={
-            outstanding > 0 ? (
+            filtersActive ? (
+              <span className="chip tabular">
+                {filtered.length} of {items.length}
+              </span>
+            ) : outstanding > 0 ? (
               <span className="chip tabular">{money(outstanding)} awaiting decision</span>
             ) : (
               <span className="chip tabular">{items.length} total</span>
             )
           }
         />
+        {items.length > 0 && (
+          <FilterBar>
+            <FilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={INVOICE_STATUS_OPTIONS}
+              placeholder="All statuses"
+            />
+            {contractOptions.length > 1 && (
+              <FilterSelect
+                value={contractFilter}
+                onChange={setContractFilter}
+                options={contractOptions}
+                placeholder="All contracts"
+              />
+            )}
+            {filtersActive && (
+              <ClearFilters
+                onClick={() => {
+                  setStatusFilter('');
+                  setContractFilter('');
+                }}
+              />
+            )}
+          </FilterBar>
+        )}
         <ErrorNote text={error} />
-        {items.length ? (
+        {filtered.length ? (
           <div className="stagger space-y-4">
-            {items.map((i) => (
+            {filtered.map((i) => (
               <article
                 key={i.id}
                 className="rounded-2xl border border-ink-200/70 bg-white p-5 transition-[border-color,box-shadow] duration-300 hover:border-ink-300 hover:shadow-soft"
@@ -1387,6 +1654,8 @@ export function InvoicesView({ user }: { user: User }) {
               </article>
             ))}
           </div>
+        ) : items.length ? (
+          <EmptyState title="No invoices match those filters" note="Try clearing a filter." />
         ) : (
           <EmptyState title="No invoices yet" note="Billing appears here once a manager raises it against a contract." />
         )}

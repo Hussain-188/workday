@@ -174,8 +174,8 @@ public class InvoicePdfService {
 			addBodyCell(table, timesheet.getWorker().getUser().getName(), bodyFont, Element.ALIGN_LEFT, fill);
 			addBodyCell(table, timesheet.getWeekStartDate().format(DATE_FORMAT), bodyFont, Element.ALIGN_LEFT, fill);
 			addBodyCell(table, timesheet.getBillableHours().toPlainString() + "h", bodyFont, Element.ALIGN_RIGHT, fill);
-			addBodyCell(table, "$" + rate.toPlainString(), bodyFont, Element.ALIGN_RIGHT, fill);
-			addBodyCell(table, "$" + lineAmount.toPlainString(), bodyFont, Element.ALIGN_RIGHT, fill);
+			addBodyCell(table, "Rs. " + rate.toPlainString(), bodyFont, Element.ALIGN_RIGHT, fill);
+			addBodyCell(table, "Rs. " + lineAmount.toPlainString(), bodyFont, Element.ALIGN_RIGHT, fill);
 			shaded = !shaded;
 		}
 
@@ -205,7 +205,7 @@ public class InvoicePdfService {
 		labelCell.setPaddingTop(8);
 		table.addCell(labelCell);
 
-		PdfPCell valueCell = new PdfPCell(new com.lowagie.text.Phrase("$" + invoice.getAmount().toPlainString(), totalValueFont));
+		PdfPCell valueCell = new PdfPCell(new com.lowagie.text.Phrase("Rs. " + invoice.getAmount().toPlainString(), totalValueFont));
 		valueCell.setBorder(com.lowagie.text.Rectangle.TOP);
 		valueCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
 		valueCell.setPaddingTop(8);

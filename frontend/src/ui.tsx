@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { AlertTriangle, Check, Search, X } from 'lucide-react';
 
 /*
  * Meridian UI kit.
@@ -66,6 +67,74 @@ export const Tag = ({ status, className = '' }: { status: string; className?: st
     {status.replace(/_/g, ' ').toLowerCase()}
   </span>
 );
+
+// ── Filtering ───────────────────────────────────────────────────────────────
+
+/** The row of search + dropdown controls that sits under a SectionHead. */
+export const FilterBar = ({ children }: { children: ReactNode }) => (
+  <div className="mb-6 flex flex-wrap items-center gap-2.5">{children}</div>
+);
+
+export const SearchField = ({
+  value,
+  onChange,
+  placeholder = 'Search…',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) => (
+  <div className="relative min-w-[200px] flex-1">
+    <Search size={15} strokeWidth={1.75} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
+    <input
+      className="input !pl-9"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      type="search"
+    />
+  </div>
+);
+
+export type FilterOption = { value: string; label: string };
+
+export const FilterSelect = ({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: FilterOption[];
+  placeholder: string;
+}) => (
+  <select
+    className="input !w-auto min-w-[9.5rem] shrink-0"
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+  >
+    <option value="">{placeholder}</option>
+    {options.map((o) => (
+      <option key={o.value} value={o.value}>
+        {o.label}
+      </option>
+    ))}
+  </select>
+);
+
+export const ClearFilters = ({ onClick }: { onClick: () => void }) => (
+  <button onClick={onClick} className="btn-quiet btn-sm shrink-0 text-pine-700 hover:bg-pine-50">
+    Clear filters
+  </button>
+);
+
+/** Builds a case-insensitive substring predicate over several string fields. */
+export const matchesQuery = (query: string, ...fields: (string | null | undefined)[]) => {
+  if (!query.trim()) return true;
+  const q = query.trim().toLowerCase();
+  return fields.some((f) => f?.toLowerCase().includes(q));
+};
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
@@ -224,7 +293,11 @@ export function Modal({
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  // Portalled straight to <body> — a modal nested under an animated ancestor
+  // (e.g. the page's tab-switch transform) would otherwise inherit that
+  // ancestor as its `position: fixed` containing block instead of the
+  // viewport, and render offset from where it belongs.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-5">
       <div
         onClick={onClose}
@@ -246,7 +319,8 @@ export function Modal({
         </header>
         <div className="px-7 pb-7 pt-6">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
