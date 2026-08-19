@@ -180,13 +180,15 @@ export const workforceApi = {
   updateWorker: (id: number, data: any) =>
     api
       .patch(`/api/workers/${id}`, {
-        name: data.name,
-        workerType: data.worker_type,
+        name: data.name || undefined,
+        workerType: data.worker_type || undefined,
         teamId: data.team_id ? Number(data.team_id) : undefined,
-        status: data.status,
+        status: data.status || undefined,
         hourlyRate: data.hourly_rate !== undefined && data.hourly_rate !== '' ? Number(data.hourly_rate) : undefined,
+        employmentStartDate: data.employment_start_date || undefined,
+        employmentEndDate: data.employment_end_date || undefined,
       })
-      .then((r) => r.data),
+      .then((r) => mapWorker(r.data)),
 
   offboard: (id: number) => api.post(`/api/workers/${id}/offboard`, {}).then((r) => r.data),
 

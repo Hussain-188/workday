@@ -346,6 +346,17 @@ export function WorkersView({ user }: { user: User }) {
     hourly_rate: '',
   };
   const [form, setForm] = useState(initial);
+  const [editing, setEditing] = useState<Worker | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    worker_type: '',
+    team_id: '',
+    status: '',
+    hourly_rate: '',
+    employment_start_date: '',
+    employment_end_date: '',
+  });
+  const [editError, setEditError] = useState('');
 
   const load = () =>
     Promise.all([workforceApi.workers(), workforceApi.teams()])
@@ -376,6 +387,34 @@ export function WorkersView({ user }: { user: User }) {
       load();
     } catch (e) {
       setError(err(e));
+    }
+  }
+
+  /** Opens the edit modal pre-filled with this worker's current record. */
+  function openEdit(w: Worker) {
+    setEditError('');
+    setEditForm({
+      name: w.name,
+      worker_type: w.worker_type,
+      team_id: w.team_id ? String(w.team_id) : '',
+      status: w.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+      hourly_rate: String(w.hourly_rate ?? ''),
+      employment_start_date: w.employment_start_date ?? '',
+      employment_end_date: '',
+    });
+    setEditing(w);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    setEditError('');
+    try {
+      await workforceApi.updateWorker(editing.id, editForm);
+      setEditing(null);
+      load();
+    } catch (e) {
+      setEditError(err(e));
     }
   }
 
@@ -472,22 +511,29 @@ export function WorkersView({ user }: { user: User }) {
                     </td>
                     {user.role === 'hr' && (
                       <td className="text-right">
-                        {w.status === 'ACTIVE' && (
-                          <button
-                            onClick={() =>
-                              ask({
-                                title: `Offboard ${w.name}?`,
-                                note: 'Their access ends immediately. Timesheets, assignments and invoices already recorded stay exactly as they are.',
-                                confirmLabel: 'Offboard',
-                                tone: 'danger',
-                                onConfirm: () => offboard(w.id),
-                              })
-                            }
-                            className="btn-danger btn-sm"
-                          >
-                            Offboard
-                          </button>
-                        )}
+                        <div className="flex justify-end gap-2">
+                          {w.status !== 'OFFBOARDED' && (
+                            <button onClick={() => openEdit(w)} className="btn-quiet btn-sm">
+                              Edit
+                            </button>
+                          )}
+                          {w.status === 'ACTIVE' && (
+                            <button
+                              onClick={() =>
+                                ask({
+                                  title: `Offboard ${w.name}?`,
+                                  note: 'Their access ends immediately. Timesheets, assignments and invoices already recorded stay exactly as they are.',
+                                  confirmLabel: 'Offboard',
+                                  tone: 'danger',
+                                  onConfirm: () => offboard(w.id),
+                                })
+                              }
+                              className="btn-danger btn-sm"
+                            >
+                              Offboard
+                            </button>
+                          )}
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -603,6 +649,100 @@ export function WorkersView({ user }: { user: User }) {
           </Card>
         </Aside>
       )}
+
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={`Edit ${editing?.name ?? ''}`}
+        note="Reassign their team, correct their rate, or update their record. Offboarding stays a separate, explicit action."
+      >
+        <form onSubmit={saveEdit} className="space-y-4">
+          <ErrorNote text={editError} />
+          <Field label="Full name">
+            <input
+              className="input"
+              value={editForm.name}
+              onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              required
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Engagement">
+              <select
+                className="input"
+                value={editForm.worker_type}
+                onChange={(e) => setEditForm({ ...editForm, worker_type: e.target.value })}
+              >
+                {WORKER_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Status">
+              <select
+                className="input"
+                value={editForm.status}
+                onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+              >
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="Team">
+            <select
+              className="input"
+              value={editForm.team_id}
+              onChange={(e) => setEditForm({ ...editForm, team_id: e.target.value })}
+              required
+            >
+              <option value="">Select team</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Hourly rate" hint="bills submitted hours on milestone invoices">
+            <input
+              className="input tabular"
+              type="number"
+              min="0"
+              step="0.01"
+              value={editForm.hourly_rate}
+              onChange={(e) => setEditForm({ ...editForm, hourly_rate: e.target.value })}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Start date">
+              <input
+                className="input"
+                type="date"
+                value={editForm.employment_start_date}
+                onChange={(e) => setEditForm({ ...editForm, employment_start_date: e.target.value })}
+                required
+              />
+            </Field>
+            <Field label="End date" hint="optional">
+              <input
+                className="input"
+                type="date"
+                value={editForm.employment_end_date}
+                onChange={(e) => setEditForm({ ...editForm, employment_end_date: e.target.value })}
+              />
+            </Field>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="btn-ghost" onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+            <button className="btn-primary">Save changes</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
